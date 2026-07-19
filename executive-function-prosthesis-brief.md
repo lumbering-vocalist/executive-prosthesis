@@ -163,7 +163,7 @@ Single-player for now, but tasks naturally reference other people ("Find out fro
 
 **Integrations (future, design for extensibility now):** GitHub Issues, Apple Reminders, and similar external systems the user's tasks already live in or flow through.
 
-**Context access:** The user will share calendar, location, and similar data to make the system context-aware (time-blindness and "other things were more urgent" mean the system needs to know what the day actually holds). Calendar awareness is not in the v1 three-feature core but is a fast-follow; design the architecture to accommodate it. Hard line: no ambient listening.
+**Context access:** The user will share calendar, location, and similar data to make the system context-aware (time-blindness and "other things were more urgent" mean the system needs to know what the day actually holds). **Read-only calendar access is v1 infrastructure** (scope decision, July 2026): the hot loops run blind without it — proactive re-presentation needs to know a window is coming, arbitration needs to know what today holds, and the canonical capture exchange already assumes the system knows Thursday's shape. Calendar *writing*, location, and richer context sources remain post-v1. Hard line: no ambient listening.
 
 ---
 
@@ -177,7 +177,9 @@ The three capabilities for the first month of daily use:
 
 **Staging honesty (per 3.3):** v1 implements the capture-time executive work in full, and the moment-of-action work in its thinnest closed-loop form — when the user engages, the system proposes **one** next action, asks whether they want to start it, and follows up shortly with a one-tap outcome check (started / blocked / changed / release). v1 is the attachment socket — the trust-and-control substrate the hot loops (Appendix C.8) will run on — not the finished prosthesis. The principle names the destination; this scope names the first step.
 
-Everything else (calendar integration, external system sync, capacity modeling, multi-user) is explicitly out of v1.
+Supporting v1 infrastructure (not a headline feature, but load-bearing): **read-only calendar access** for one provider, so proposals about the day's shape are honest rather than guessed. No event writing in v1.
+
+Everything else (calendar writing, location, external system sync, capacity modeling, multi-user) is explicitly out of v1.
 
 ### Platform & stack
 
@@ -189,7 +191,7 @@ Everything else (calendar integration, external system sync, capacity modeling, 
 ### Data model notes for the implementer
 
 At minimum, first-class concepts should include:
-- **Item** (task/project/thought) with lifecycle states including: captured, shaped, scheduled-ish, done, **released** (distinct from deleted), and dormant/stale (internal state that triggers renegotiation, never displayed as "overdue")
+- **Item** (task/project/thought) with lifecycle states including: captured, shaped, scheduled-ish, done, **released** (distinct from deleted), **parked** (user-chosen "keep it, stop asking until X" — per 3.5), and dormant/stale (internal state that triggers renegotiation, never displayed as "overdue")
 - **Category/Project hierarchy** — AI-proposed, user-confirmed, flexible
 - **People** — as referenced entities (see §5)
 - **User memory/profile** — structured, human-readable, fully viewable and editable in the UI (see 3.6): routines, preferences, patterns, important dates
@@ -204,7 +206,7 @@ The founder uses it daily for a month without it becoming another system that de
 ## 7. Explicitly Deferred (Discussed, Not v1)
 
 - **Capacity/spoons modeling** — how the system knows the user's energy today (ask directly vs. infer from calendar density/sleep data vs. volunteered). Deferred by founder decision, but the *never make the user feel bad* posture must hold regardless of capacity awareness.
-- **Calendar/location integration** — user is willing; fast-follow after v1 core proves out.
+- **Calendar writing and location integration** — user is willing; fast-follow after v1 core proves out. (Read-only calendar moved into v1 by the July 2026 scope decision — see §5, §6.)
 - **External integrations** — GitHub Issues, Apple Reminders sync.
 - **Native iOS app.**
 - **Multi-user / family features.**
@@ -332,7 +334,7 @@ This is the structural reason todo lists fail this population (§2): a list is a
 
 ADHD involves steep **delay discounting** — future rewards and consequences lose motivational force abnormally fast — and genuinely impaired time perception ("temporal myopia"). Deadlines acquire force only when near, which produces the familiar panic-deadline work pattern, and abstract futures ("next week") exert almost no pull.
 
-**Design rules:** The system **externalizes time**: it converts abstract deadlines into concrete, near-term, perceivable moments ("Thursday morning after drop-off is your open window") — exactly the move in the canonical capture exchange (§4.1). At capture, vague timeframes ("in the next week") are immediately translated into specific anchored slots. Calendar awareness (fast-follow, §5) exists to make the day's actual shape visible to the system so it can make time visible to the user.
+**Design rules:** The system **externalizes time**: it converts abstract deadlines into concrete, near-term, perceivable moments ("Thursday morning after drop-off is your open window") — exactly the move in the canonical capture exchange (§4.1). At capture, vague timeframes ("in the next week") are immediately translated into specific anchored slots. Calendar awareness (read-only in v1, §5) exists to make the day's actual shape visible to the system so it can make time visible to the user.
 
 ### C.4 Prospective memory: event cues beat clock cues
 
