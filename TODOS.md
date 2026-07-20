@@ -1,5 +1,23 @@
 # TODOS
 
+## Full DESIGN.md via /design-consultation (pre-SaaS)
+
+**What:** A real design system doc — exact palette values, spacing scale, component inventory — beyond plan §5.6's token summary.
+**Why:** §5.6 + approved mockup variant B are sufficient for v1; a DESIGN.md matters when SaaS-phase screens multiply and other hands touch the UI.
+**Pros:** Every future design decision calibrates against a stated system instead of re-deriving from the mockup.
+**Cons:** ~an hour of consultation whose benefit mostly lands post-v1.
+**Context:** /plan-design-review 2026-07-19 (D10.1). Design language extracted from variant B at `~/.gstack/projects/lumbering-vocalist-executive-prosthesis/designs/home-stream-capture-20260719/variant-B.png`.
+**Depends on / blocked by:** Nothing; any time before SaaS phase.
+
+## Mockups for remaining screens before T7 (/design-shotgun)
+
+**What:** Variant rounds for Held, You/memory, the proposal card, and the outcome-check card, extending variant B's approved visual language.
+**Why:** T7–T11 build these surfaces; a 20-minute variant round each beats inventing them in code.
+**Pros:** The implementer builds from an approved visual, not a text spec; catches composition problems while they're regenerable.
+**Cons:** Only worth doing right before T7 — done now they'd go stale against T1–T6 learnings.
+**Context:** /plan-design-review 2026-07-19 (D10.4). Base direction: variant B (see plan "Approved Mockups"); container rule + design language in plan §5.5–§5.6.
+**Depends on / blocked by:** T7 approaching; T1 tokens landed (so mockups can use real palette values).
+
 ## Decay tripwire digest — ABSORBED into plan (re-anchored 2026-07-19)
 
 **Status:** No longer a deferred item. The daily email digest is now **T5 in `engineering-plan.md` v3** (Convex cron + Resend), part of milestone M1 — it lands right after custody (T4) and serves as the resurfacing floor for the capture-only phase, plus the pending-confirmations inventory (review ruling D21). Original rationale (codex outside-voice D9.6, 2026-07-18) preserved: a daily recency-based email is the cheapest decay tripwire and dogfoods email-first reach before the real digest engine exists.
