@@ -95,6 +95,13 @@ Canonical tables hold **confirmed facts only**; AI output lives in `proposals` u
 | drain failing (>~30s, or app about to background) | persistent amber-neutral line pinned above the dock: "Not safely stored yet — keep the app open a moment," with the audio player visible so the thing itself demonstrably exists. **Never red, never an alert icon.** |
 | transcribing | "Transcribing…" on the card; the audio is the content until then |
 | transcription failed | "Couldn't transcribe — audio kept" + play button (3.9 honesty) |
+| mic permission denied | calm guidance to Settings ("I need the microphone for voice — here's where to turn it on"), text capture offered; never a bare browser error |
+| interruption (call / Siri / route change) | recording auto-stops, partial audio saved as a capture, card says so honestly |
+| cancel | one tap discards, brief inline "Undo" (~5s); no confirmation dialog |
+| concurrent | one recording at a time — mic tap during recording stops and saves, never starts a second |
+| background-killed mid-recording | next open states exactly what was and wasn't kept (extends the §4/T4 truth-telling clause) |
+
+**Capture from any screen (CX8):** capturing from Held or You stays in place — the state line renders in the dock itself, no forced navigation to Home. The recording UI (waveform + timer) expands *from* the dock; the dock is the chrome, so "no other chrome" means nothing appears beyond the expanded dock. **Seen-definition for unread (CX7):** a message counts as seen at ≥50% visible for ≥1s while the document is visible, with the dock-occluded strip excluded.
 
 **State placement rules (every named degraded state has a home):**
 
@@ -106,7 +113,7 @@ Canonical tables hold **confirmed facts only**; AI output lives in `proposals` u
 
 **Empty states are features:** the stream is never empty — the system speaks first (§9.5). Held empty: "Nothing here yet — everything you capture lands here and stays." Memory empty: "I'll propose things as I learn them — you approve each one."
 
-**Unread:** a faint left-edge accent that self-clears when the message has been on screen (viewport-seen — no gesture, no clearing obligation). No numeric unread badge anywhere, in-app or app-icon (CI-enforced, §13).
+**Unread:** a faint left-edge accent that self-clears when the message has been on screen (viewport-seen — no gesture, no clearing obligation). No numeric unread badge anywhere, in-app or app-icon (CI-enforced, §13). Implementation: IntersectionObserver feeding a debounced batch flush (~2s or on visibilitychange), one idempotent `readAt` mutation per flush — never one write per message per scroll (D5).
 
 ## 5. Capture entry surfaces
 
@@ -135,11 +142,12 @@ Three destinations plus a persistent capture dock — no tab bar, no dashboard, 
 
 - **Stream = home.** The product's value surface (brief litmus #8); opening the app lands here, always scrolled to newest.
 - **Held** (top-left): search/browse of everything in custody — items by category, captures, people, link history. Framed as an archive that demands nothing: no counts, no "needs processing" queue, no lifecycle-state sorting that fronts stale items.
-- **You** (top-right): transparent memory (§3 `memory`), calendar include toggles, cadence, delivery health, quiet hours, email address. Settings live here — no separate settings destination.
+- **You** (top-right): transparent memory (§3 `memory`), calendar include toggles, cadence, delivery health, quiet hours, email address, text size. Settings live here — no separate settings destination.
+- **Frame stable, content additive (CX5):** both corner destinations exist from T4 but show only what exists — You at T4 is text size + backup status; memory arrives T7, calendar toggles T9, cadence/delivery health T10. No dead controls, no placeholder sections, and the frame never changes shape.
 - **Capture dock:** mic primary (≥64pt), text field secondary, keyboard toggle tertiary; visible on all three destinations. The dock is always *capture* — replying to a thread happens only inside that thread's expanded view (prevents reply/capture conflation corrupting both the conversation context and the captures inbox).
 - Visual reference: approved mockup variant B (see Approved Mockups).
 
-**Container rule (D6):** a container exists *only* to differentiate message kind (tint + glyph + label, variant B's system: e.g. green=shape-of-day, cream=observation, lavender=offer, blue=captured) or to hold actions. No nested cards, no decorative shadows, no colored left-borders, one radius token everywhere. Informational-only content inside an expanded thread renders as plain typography. This is the guardrail against card proliferation as T7–T13 add message kinds.
+**Container rule (D6):** a container exists *only* to differentiate message kind (tint + glyph + label, variant B's system: e.g. green=shape-of-day, cream=observation, lavender=offer, blue=captured) or to hold actions. No nested cards, no decorative shadows, no *decorative* colored left-borders (the §4.5 unread accent is a functional state indicator, explicitly exempt — CX7), one radius token everywhere. Informational-only content inside an expanded thread renders as plain typography. This is the guardrail against card proliferation as T7–T13 add message kinds.
 
 ## 5.6 Design language (locked by /plan-design-review D7; extracted from approved variant B)
 
@@ -147,15 +155,15 @@ Implemented as CSS variables at T1 — framework defaults never determine the br
 
 - **Color tokens:** warm off-white ground; near-black ink; deep-green accent (B's mic/Accept green); low-saturation per-kind container tints (§5.5 container rule); secondary gray; amber-neutral for degraded states. **No red anywhere in v1** — memory deletion confirms in neutral emphasis; nothing in v1 qualifies for the "immediate external danger" red is reserved for.
 - **Dark mode ships at T1** via the same tokens (`prefers-color-scheme`): near-black `#121212`-family ground (never pure black/white extremes), tints re-derived at low luminance. A light-only screen at 11pm is a sensory event for this audience.
-- **Typography:** Figtree (self-hosted variable woff2, preloaded at T1), `-apple-system` fallback only, line-metrics checked against fallback. ≥17px/1.5 body, rem-based so iOS text-size settings scale everything; two weights.
-- **Density rule (brief C.1):** never more than ~3 actionable things above the fold — an acceptance criterion, not a vibe.
+- **Typography:** Figtree (self-hosted variable woff2, preloaded at T1), `-apple-system` fallback only, line-metrics checked against fallback. ≥17px/1.5 body; two weights. **Text-scaling mechanism (iOS Dynamic Type doesn't reach web fonts on its own):** root sizing via the `font: -apple-system-body` trick (`:root` inherits the Dynamic-Type-scaled size; `font-family` overridden to Figtree — size and family cascade independently), rem everywhere below; plus an in-app text-size setting in You as the explicit fallback. Standalone PWAs have no Safari zoom menu — without this the §5.7 scaling promise silently no-ops.
+- **Density rule (brief C.1, CX6 rewrite):** at most **one actionable assistant turn** above the fold; persistent chrome (capture dock, corner entries) is excluded from the count; a card's action set (e.g. the §11 2×2 grid) counts as one decision, not four things. An acceptance criterion, not a vibe.
 - **Motion budget — exactly three families:** (1) capture-state transitions; (2) a new assistant turn entering *without moving the reading position*; (3) calm collapse/closure after a decision. Everything else is immediate. All motion ≤200ms fades/eases; no bounces, no auto-scroll, no ambient pulsing — a notification-adjacent product that wiggles is a nag. Honors `prefers-reduced-motion` (brief C.7: surprise is dysregulating, including motion).
 
 ## 5.7 Accessibility & viewport contract (locked by /plan-design-review D8; lands at T1, tested per-step)
 
 - **Touch targets ≥44pt** everywhere; capture mic ≥64pt (§5.5).
 - **Screen-reader contract:** all controls labeled; capture states announced ("Recording," "Saved") — the trust beat must be audible, not just visible; message kind + content read in stream order; the §11 outcome grid reads as four options, not a table.
-- **Haptics where supported** on capture start/stop and "Saved" — the eyes-free confirmation channel.
+- **Haptics (honest iOS scope, CX9):** WebKit ships no vibration API (verified 2026), and the iOS 18 switch-element hack would put `role=switch` semantics on a mic action — false semantics for VoiceOver, so it's out. Capture is a plain button; the eyes-free confirmation channel is the screen-reader announcement + the Siri capture path (native feedback). Optional subtle audio tick behind a setting, default off.
 - **Visible keyboard focus** (`:focus-visible` ring in accent green); every action chip keyboard-operable.
 - **Contrast ≥4.5:1 for body text in both modes**, checked against each §5.5 container tint specifically (tinted grounds are where contrast quietly dies); secondary-gray text must pass on every tint.
 - **200% text scaling without loss of action access** — chips wrap, never truncate; the dock never occludes content (safe-area padding + scroll inset).
@@ -202,7 +210,7 @@ Converts event-phrased anchors ("after school drop-off Thursday") into concrete 
 
 ## 9. Cold-start bootstrap (first-week trust window)
 
-- **Brain-dump mining:** the Step-1 ~20-min voice brain-dump is processed by the extraction pipeline into proposed items AND proposed memory records (routines, people, important dates) — the eval corpus and the seed data are the same recording.
+- **Brain-dump mining:** the Step-1 ~20-min voice brain-dump is processed by the extraction pipeline into proposed items AND proposed memory records (routines, people, important dates) — the eval corpus and the seed data are the same recording. **Multi-take contract (CX3/D7):** the brain-dump is a guided series of ordinary captures — "talk as long as you like; when you pause, I save — then keep going." Each take goes through the T4 airlock unchanged; no chunked-recording machinery, no session manifest; mining consumes the set via `captureIds[]`. Interrupted takes auto-save partials (§4.5).
 - **Routines interview:** the first check-in conversation asks for the skeleton of a normal week (drop-off, pickup, medication, trash) — each answer a user-stated memory record with runway buffers.
 - Day-1 shape-of-day messages draw on seeded routines; the system never fakes familiarity it doesn't have.
 
@@ -210,20 +218,22 @@ Converts event-phrased anchors ("after school drop-off Thursday") into concrete 
 
 Ordered; each beat earns the next ask. No setup-completion percentages anywhere.
 
-1. **Welcome** — one screen, the custody promise in one sentence ("Tell me things. I keep them, no matter what.").
-2. **Guided Add-to-Home-Screen** — illustrated Safari share-sheet walkthrough, skippable.
-3. **First capture invitation** — "Tell me one thing on your mind." The first success is 10 seconds away; the small capture precedes the big ask.
-4. **Brain-dump as the second ask**, framed as an offer ("Want to give me more to hold?") — any length, pausable/resumable, progressively saved (feeds §9 mining and the T14 corpus).
-5. **Routines interview arrives as the first stream message** — the stream is never empty; the system speaks first.
-6. **Notification permission requested only when there is something to deliver** ("I'll have thoughts about your day tomorrow morning — want them as notifications?"). One iOS refusal is near-fatal; the ask must be earned. Email is named as the floor if refused.
-7. **Siri Shortcut offered at end of week 1**, not day 1 — one setup ritual at a time (T6 ships the endpoint; the offer is a stream message).
+**Storage-partition reality (CX1):** onboarding starts in Safari but the installed app shares no storage with it — so **onboarding progress lives server-side** (keyed to the account, not the browser), and everything after beat 2 happens in the installed app, with one sign-in there. Beats are annotated with their owning build step; before a step lands, its beat simply doesn't exist yet (frame stable, content additive — CX5).
+
+1. **Welcome** (T4, Safari) — one screen, the custody promise in one sentence ("Tell me things. I keep them, no matter what.").
+2. **Guided Add-to-Home-Screen** (T4, Safari) — illustrated share-sheet walkthrough, skippable; ends with "open it from your home screen and sign in once there."
+3. **First capture invitation** (T4, installed) — "Tell me one thing on your mind." The first success is 10 seconds away; the small capture precedes the big ask.
+4. **Brain-dump as the second ask** (T4, installed) — framed as an offer ("Want to give me more to hold?"); see §9 for the multi-take contract (D7).
+5. **Routines interview arrives as a stream message** (T8) — from T8 on, the stream is never empty for a fresh account; the system speaks first.
+6. **Notification permission** (T10, installed) — iOS requires the request come from the installed app during a direct user gesture, so the ask is a tappable stream offer ("I'll have thoughts about your day tomorrow morning — want them as notifications?" → the tap is the gesture → system prompt). Fires only after the first shape-of-day exists. One refusal is near-fatal; email is named as the floor if refused.
+7. **Siri Shortcut offered at end of week 1** (T6 ships the endpoint; the offer is a stream message) — one setup ritual at a time.
 
 ## 10. Message stream & orchestration
 
-- **Single sender choke point:** every outbound message is written and delivered by one module — one write path for message + outcome + deliveries.
+- **Single sender choke point:** every outbound message is written and delivered by one module — one write path for message + outcome + deliveries. **The minimal sender lands at T4** (message insert + in-app render, **with idempotency keys and kind-level dedup from day one** — recurring health and first-run messages would duplicate without them); email channel added T5, push T10; **T10 extends this same module with the planner** (suppress/reschedule/invalidate) — one owner, no re-land, no refactor ambiguity (CX4). T4's system-health messages, T5's digest pointers, and §9.5's first-run messages all pre-date T10, and the one-write-path invariant must hold from the first message ever written.
 - **Orchestration policy (the "planner"):** an explicit scheduled pass decides generate / suppress / dedupe / invalidate / reschedule — morning shape-of-day, event-driven observations, runway messages, digest content. Calendar changes invalidate stale pending messages. Cadence is a first-class setting; contract-level adaptation is offered, not imposed (3.8).
 - **Transition runway (honest v1 scope):** calendar-event lead-time reminders using per-routine user-stated buffers from memory ("you said pickup needs 25 min"). No travel-time claims. Freshness = the ~5-min poll; if the last sync is stale the message says what it knows. Watch channels + travel-time are the post-v1 upgrade (TODO).
-- **Delivery:** Level 1 posture for everything in v1 — ignorable observations and offers. Push + in-app; **email digest (T5) is the daily reliability floor.** **Digest design (D5):** a personal plain note, not marketing email — single column ≤560px, no hero images, no button-banners; one-sentence human opener; unconfirmed captures listed as the user's own words, **never counted** (a count is the accumulating-number pattern; show the three thoughts, not "3 thoughts"); one quiet link to the app; varied, content-derived subject lines, never count-based. Email links open Safari, not the installed PWA — the digest is fully self-sufficient (it informs; the PWA acts); session continuity across that boundary is a T5 verify step. Layout + subject strategy are tone-eval corpus.
+- **Delivery:** Level 1 posture for everything in v1 — ignorable observations and offers. Push + in-app; **email digest (T5) is the daily reliability floor.** **Digest design (D5):** a personal plain note, not marketing email — single column ≤560px, no hero images, no button-banners; one-sentence human opener; unconfirmed captures listed as **truncated first-words snippets (~8 words + ellipsis) of the user's own words, never counted** (recognizable, not fully exposed — CX10/D8), capped at 5 with "the rest are in the app" (no number); one quiet link to the app; **subject lines from a rotated content-free set at T5** (no LLM before the T7 gate), never count-based — content-derived subjects are a T7+ upgrade. Email links open Safari, not the installed PWA, and **installed-PWA storage is fully partitioned from Safari** (verified 2026: cookies/localStorage/IndexedDB not shared; only SW registration + CacheStorage) — so every digest link lands in a logged-out browser session, guaranteed. **Digest self-sufficiency is law:** no link in the digest may require auth to be meaningful; the single "open app" pointer, when it lands logged-out in Safari, shows a calm one-liner ("Open this from your home screen icon"), never a login wall. Layout + subject strategy are tone-eval corpus.
 - **Delivery health:** re-subscribe on open; a scheduled check reads `deliveries[]` vs readAt patterns — push looks dead → say so via channels that work and offer to fix it (3.8 applied to infrastructure).
 
 ## 11. The thin closed loop (v1's one hot-loop implementation)
@@ -232,7 +242,11 @@ On engagement (app open or message reply): propose **one** next action, phrased 
 
 **Outcome-check surface (D5):** a stream card — one line ("How did the blood-test errand go?") + four equal-weight, same-color buttons in a 2×2 grid. No primary among them: visual equality of the four outcomes is principle 3.4 rendered. `release` is labeled "Letting it go." iOS web push has no action buttons — the push opens the app to this card; "one-tap" happens here, not in the notification. **Stale checks reword:** unanswered >N hours, the card becomes past-tense-neutral ("This one's from earlier — did it happen, or did the day change?"), then expires into the ignored-is-data path — never re-asked.
 
-**Release acknowledgment (D5):** one quiet sentence of genuine text — "Done — that's off your plate for good." No animation, no emoji, no success-green burst; a gentle settling transition at most (motion budget, §5.6). Release responses are tone-eval corpus (§13).
+**Done-closure follow-up (CX11/D9):** after a `started` outcome, the *next* engagement includes a one-tap closure check ("Did the blood test get done?" → `done` / "still going") — the lifecycle's `done` transition gets a designed path, so finished tasks never rot into dormancy and trigger a renegotiation about completed work. Ignored = data, never re-asked (3.8).
+
+**Release undo (CX11/D9):** the release tap shows a ~5s inline "Undo" before the terminal transition commits (same pattern as capture-cancel) — one-tap terminal actions get a guard, not a confirmation dialog.
+
+**Release acknowledgment (D5, wording per CX11):** one quiet sentence of genuine text — "Released — that's off your plate for good." Never opens with "Done" (release ≠ completion). No animation, no emoji, no success-green burst; a gentle settling transition at most (motion budget, §5.6). Release responses are tone-eval corpus (§13).
 
 ## 12. Renegotiation engine (two speeds, with restraint)
 
@@ -242,14 +256,14 @@ On engagement (app open or message reply): propose **one** next action, phrased 
 
 ## 13. Testing, eval, privacy
 
-- Vitest + convex-test; CI on every push; Playwright E2E for the two web journeys (capture→proposal→confirm; offline capture→reconnect→drain); **manual iOS device checklist** (install, voice capture, push arrival, offline capture, **VoiceOver + haptics + 200%-text pass verifying §5.7**) — no automation reaches installed-PWA iOS Safari, so this is honest, not optional.
+- Vitest + convex-test; CI on every push; Playwright E2E for the three web journeys (capture→proposal→confirm; offline capture→reconnect→drain; first-run §9.5: welcome→A2HS→first capture→brain-dump offer→routines message); **manual iOS device checklist** (install, voice capture, push arrival, offline capture, **VoiceOver + 200%-text pass verifying §5.7**, **Safari→installed onboarding/auth continuity, notification permission from message-tap gesture + denial recovery, long-recording iOS suspension, keyboard/dock collision, dark-mode status-bar chrome, digest-link logged-out landing** — CX12) — no automation reaches installed-PWA iOS Safari, so this is honest, not optional.
 - **No-shame CI test:** no overdue count/representation derivable from any query surface; released/parked render as first-class states; no release-count surfaces; **no numeric unread/pending badge on any communication surface** (in-app, app icon, Held/You entry icons) — accumulating counts attached to the un-dealt-with are banned regardless of what table derives them (D4).
 - **Visual no-shame screenshot tests (T14, D10):** the four states where visual shame would accumulate — high backlog, long dormancy, repeatedly-ignored offer, repeated capture failure — screenshot-asserted against the §4.5/§5.6 rules (no red, no counts, neutral registers). The no-shame CI test checks queries; this checks pixels.
-- **Tone eval (litmus test #1, tested):** adversarial corpus of the highest-shame-risk generated text — renegotiation openers, wave-off narrowing, pending-capture digest wording, release acknowledgments — scored against a no-shame rubric (LLM-judged + founder-labeled). **Plus all hand-written static UI state microcopy** (§4.5 states, empty states, degraded-ladder warnings): shame lives in state copy as much as in generated text. The conduct rule is a test, not an assertion.
+- **Tone eval (litmus test #1, tested):** adversarial corpus of the highest-shame-risk generated text — renegotiation openers, wave-off narrowing, pending-capture digest wording, release acknowledgments — scored against a no-shame rubric (LLM-judged + founder-labeled). **Plus all hand-written static UI state microcopy** (§4.5 states, empty states, degraded-ladder warnings): shame lives in state copy as much as in generated text. **All static UI strings live in one `copy.ts` module from T4** — components and screen-reader labels import from it, and the static-copy tone eval reads it mechanically (no manual corpus scrape, no drift across component/SR/eval). The conduct rule is a test, not an assertion.
 - **Custody tests:** kill-network/kill-LLM capture; buffer-drain idempotency; IndexedDB-eviction simulation (buffer wiped between sessions → app tells the truth); transcription-failure audio retention; voice degraded ladder; stuck-job scanner + dead-letter retry; backup/restore exercised.
-- **Per-step tests (named in §14):** transition-map exhaustive legal/illegal; context-gate tombstone filtering; structured-output conformance; job idempotency; syncToken resync + full-resync fallback; per-calendar toggles; TZ/DST window math; anchor-resolver suite; delivery ladder + health detection; thin-loop outcome branches; fast-lane rate limit + collapse; dormancy + four exits + narrowing.
+- **Per-step tests (named in §14):** transition-map exhaustive legal/illegal; context-gate tombstone filtering; structured-output conformance; job idempotency; syncToken resync + full-resync fallback; per-calendar toggles; TZ/DST window math; anchor-resolver suite; delivery ladder + health detection; thin-loop outcome branches; fast-lane rate limit + collapse; dormancy + four exits + narrowing. **Design-delta additions (D4):** capture-state component tests — all 7 §4.5 states rendered, never-red asserted, SR announcement per state (T4); sender one-write-path unit tests + channel-extension tests proving T5/T10 additions don't fork the path (T4/T5/T10); unread-accent viewport-seen self-clear (T10); notification-ask ordering — fires only after the first shape-of-day exists, from the installed app via message-tap gesture (T10, CX2); digest content tests — list-never-count + no-auth-required-links (T5); stale outcome-check rewording branch (T11).
 - **Eval harness:** labeled corpus from the founder's brain-dump; categorization/anchor/extraction metrics + the tone eval.
-- **Privacy gates per integration (not end-loaded):** each step that adds an external surface lands with its boundary test — T4: no capture text in Sentry, Convex/Vercel log hygiene, provider error bodies scrubbed, OpenAI retention posture documented (~30-day abuse-monitoring; ZDR pursuit is a TODO); T5: minimal email content; T9: calendar data stays in Convex; T10: push payloads are pointers, no content in notification previews; T14: full-surface audit; no preview-deploy access to real data.
+- **Privacy gates per integration (not end-loaded):** each step that adds an external surface lands with its boundary test — T4: no capture text in Sentry, Convex/Vercel log hygiene, provider error bodies scrubbed, OpenAI retention posture documented (~30-day abuse-monitoring; ZDR pursuit is a TODO); T5: email carries truncated capture snippets (~8 words, cap 5) with content-free subjects — the documented CX10/D8 posture; full text and content-derived subjects deferred to T7+; kind-level-only becomes the default at SaaS phase; T9: calendar data stays in Convex; T10: push payloads are pointers, no content in notification previews; T14: full-surface audit; no preview-deploy access to real data.
 
 ## 14. Build order
 
@@ -299,15 +313,15 @@ Track: capture keeps happening (esp. voice, esp. via Siri path); messages keep g
 | Review | Trigger | Why | Runs | Status | Findings |
 |--------|---------|-----|------|--------|----------|
 | CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
-| Codex Review | `/codex review` | Independent 2nd opinion | 1 | CLEAR | 6 findings (CX1–CX6), all resolved & folded |
-| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR | 13 issues, 0 critical gaps, all resolved |
+| Codex Review | `/codex review` | Independent 2nd opinion | 3 | CLEAR | latest: 12 delta findings (CX1–CX12), all resolved & folded |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 3 | CLEAR | latest (delta, f8fc301): 26 issues (3 arch, 2 quality, 8 test gaps, 1 perf, 12 outside-voice), 0 critical gaps, all resolved |
 | Design Review | `/plan-design-review` | UI/UX gaps | 1 | CLEAR | score: 5/10 → 9/10, 8 decisions (D3–D10), 0 unresolved |
 | DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | — |
 
-**CODEX:** eng outside voice (v3): 6 non-overlapping findings, all folded. Design outside voice (this review): HARD REJECT verdict on the pre-review interface spec (stacked-cards rejection, 7/7 litmus fails, "T0 interaction contract" demand) — all 9 findings resolved into §4.5, §5.5–§5.7, §9.5 and per-step rulings D3–D10.
+**CODEX:** three outside-voice runs. v3 eng: 6 findings, folded. Design review: HARD REJECT on the pre-review interface spec, 9 findings resolved into §4.5–§9.5. Eng delta (f8fc301): 12 findings — Safari/installed storage partition breaking first-run (CX1), impossible notification sequencing (CX2), brain-dump architecture overreach (CX3), under-spec'd minimal sender (CX4), dead-control risk (CX5), density-rule contradiction (CX6), unread-vs-container-rule conflict (CX7), missing capture states (CX8), false switch semantics (CX9), digest privacy/bounding (CX10), lifecycle done-gap + release undo (CX11), manual-checklist gaps (CX12) — all ruled (D6–D9) and folded.
 
-**CROSS-MODEL:** eng voices had zero overlap; design voices (Codex + Claude subagent) **converged** — both independently demanded a pre-implementation UI contract, the capture state machine, visual shame prevention, and a designed release moment. Convergence treated as the strongest signal in the review. Home-screen direction validated by generated mockups (variant B approved on the comparison board).
+**CROSS-MODEL:** iOS platform facts verified by web search + Codex convergence: installed-PWA storage fully partitioned from Safari; no WebKit vibration API; Dynamic Type requires the `-apple-system-body` root trick. Design voices converged on the UI contract; eng-delta voices had zero overlap with the in-review findings (A1–A3, Q1–Q2, P1) except A1/CX1 (same partition fact, different consequences — both folded).
 
-**VERDICT:** ENG + DESIGN CLEARED — ready to implement (T1). Note: the eng review predates the design-spec additions (§4.5, §5.5–§5.7, §9.5); they change UI scope inside existing steps, not architecture, but a delta eng pass is recommended before T4.
+**VERDICT:** ENG + DESIGN CLEARED at f8fc301 + design-delta edits — ready to implement (T1).
 
 NO UNRESOLVED DECISIONS
