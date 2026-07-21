@@ -1,0 +1,178 @@
+/*
+ * Design tokens — engineering-plan.md §5.6 (locked by /plan-design-review D7),
+ * extracted from approved mockup variant B. Framework defaults never determine
+ * the brand: every color, radius, duration, and size below is an owned token.
+ *
+ * Hard rules encoded here (CI-tested in tests/tokens.test.ts):
+ *  - No red anywhere in v1 (§5.6). Degraded states use amber-neutral (§4.5).
+ *  - One radius token everywhere (§5.5 container rule).
+ *  - Motion ≤200ms, three families only, honors prefers-reduced-motion.
+ *  - Dark mode ships at T1 via the same tokens; #121212-family ground,
+ *    never pure black/white extremes.
+ */
+
+/* Figtree — self-hosted variable font (§5.6). Preloaded in app/layout.tsx. */
+@font-face {
+  font-family: "Figtree";
+  font-style: normal;
+  font-weight: 300 900;
+  font-display: swap;
+  src: url("/fonts/figtree-latin-var.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Figtree";
+  font-style: normal;
+  font-weight: 300 900;
+  font-display: swap;
+  src: url("/fonts/figtree-latin-ext-var.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+    U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+:root {
+  /* -- color: warm off-white ground, near-black ink, deep-green accent -- */
+  --color-ground: #faf6ef;
+  --color-ink: #1c1b18;
+  --color-ink-secondary: #5c5850; /* must pass 4.5:1 on every tint below */
+  --color-accent: #2f6b4f; /* variant B's mic/Accept green */
+  --color-on-accent: #fbfaf7;
+
+  /* -- per-kind container tints (§5.5: tint + glyph + label differentiate kind) -- */
+  --tint-shape-of-day: #e4efe4;
+  --tint-observation: #f5eedd;
+  --tint-offer: #eae6f4;
+  --tint-captured: #e3ecf4;
+
+  /* -- degraded states: amber-neutral, never red, never alert-styled (§4.5) -- */
+  --color-degraded: #7a5e14;
+  --tint-degraded: #f4ead1;
+
+  --color-border: #e5ded1;
+
+  /* -- geometry -- */
+  --radius: 14px; /* the one radius token (§5.5 container rule) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --column-max: 640px; /* desktop/tablet: one centered column (§5.7) */
+  --tap-min: 44px; /* touch targets ≥44pt (§5.7) */
+  --tap-mic: 64px; /* capture mic ≥64pt (§5.5) */
+  /* Height the capture dock will occupy (T4). Scroll surfaces reserve this
+     from day one so the dock never occludes content (§5.7). */
+  --dock-clearance: calc(var(--tap-mic) + var(--space-4) * 2);
+
+  /* in-app text-size setting (You, §5.6) multiplies the ramp; 1 until T4+ */
+  --text-scale: 1;
+
+  /*
+   * Type ramp: two weights, four sizes, all pre-multiplied by --text-scale
+   * so the in-app setting scales every text role, not just body. Components
+   * size text with these tokens, never raw rem. Body ≥17px (§5.6); inputs
+   * must use body size or larger (iOS zooms on focus below 16px).
+   */
+  --weight-regular: 400;
+  --weight-emphasis: 600;
+  --font-size-body: calc(1.0625rem * var(--text-scale)); /* 17px */
+  --font-size-label: calc(0.9375rem * var(--text-scale)); /* 15px, secondary */
+  --font-size-title: calc(1.375rem * var(--text-scale)); /* 22px */
+  --font-size-display: calc(1.75rem * var(--text-scale)); /* 28px */
+  --line-height-body: 1.5;
+  --line-height-title: 1.3;
+
+  /* -- motion: three families, ≤200ms, fades/eases only (§5.6) -- */
+  --motion-duration: 180ms;
+  --motion-ease: cubic-bezier(0.25, 0.1, 0.25, 1);
+
+  /*
+   * iOS Dynamic Type (§5.6): standalone PWAs get no Safari zoom menu, and
+   * Dynamic Type doesn't reach web fonts on its own. `font: -apple-system-body`
+   * makes the root inherit the Dynamic-Type-scaled size; the font-family line
+   * after it restores Figtree (size and family cascade independently).
+   * Non-Apple browsers ignore the shorthand and keep their default root size.
+   * Everything below is rem so the whole UI scales from this root.
+   */
+  font: -apple-system-body;
+  font-family: "Figtree", -apple-system, sans-serif;
+
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    /* #121212-family warm near-black; never pure black/white (§5.6) */
+    --color-ground: #151412;
+    --color-ink: #ece8e1;
+    --color-ink-secondary: #a5a096;
+    --color-accent: #6fae8c; /* accent lifted to hold ≥4.5:1 on dark ground */
+    --color-on-accent: #10120f;
+
+    /* tints re-derived at low luminance */
+    --tint-shape-of-day: #1c2a20;
+    --tint-observation: #2a2418;
+    --tint-offer: #262033;
+    --tint-captured: #1b2530;
+
+    --color-degraded: #d3a84c;
+    --tint-degraded: #2e2611;
+
+    --color-border: #2c2a25;
+  }
+}
+
+/* Motion family exception: surprise is dysregulating, including motion (C.7) */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-duration: 0ms;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  /* the stream never rubber-bands the app (§5.7) */
+  overscroll-behavior-y: none;
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: 100%;
+  background: var(--color-ground);
+  color: var(--color-ink);
+  /* ≥17px/1.5 body (§5.6) */
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+  font-weight: var(--weight-regular);
+  -webkit-font-smoothing: antialiased;
+  /* §5.7 PWA chrome: content respects the notch/home-indicator */
+  padding-top: env(safe-area-inset-top);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+
+/* Visible keyboard focus in accent green (§5.7) */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* One centered column, dock bottom-center; not stretched mobile (§5.7).
+   Bottom padding reserves the dock's height so the last content line is
+   always reachable above it. */
+.app-column {
+  max-width: var(--column-max);
+  margin-inline: auto;
+  padding-inline: var(--space-4);
+  padding-bottom: calc(env(safe-area-inset-bottom) + var(--dock-clearance));
+}
