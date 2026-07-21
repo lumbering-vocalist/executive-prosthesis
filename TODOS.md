@@ -1,5 +1,26 @@
 # TODOS
 
+## Sentry exception-value redaction (pre-T3, before capture data flows)
+
+**What:** Replace the T1 truncation-only policy on `exception.values[].value` with real redaction (content-tagging or pattern-scrub) in `lib/sentry-scrub.ts`.
+**Why:** All three review models (Claude structured, Claude adversarial, Codex ×2) converged on the same hole: runtime errors echo their input — V8's `JSON.parse` SyntaxError quotes the parsed payload, Convex validators echo argument values — so the moment capture text flows through a parser (T3 schema / T4 custody), exception messages can carry it. T1 caps values at 300 chars and keeps the "never interpolate capture content into errors" rule, which is honest but not enforced.
+**Context:** /ship adversarial review 2026-07-21; policy + cap documented in `lib/sentry-scrub.ts` header. Consider inverting extra/contexts scrubbing to an allowlist at the same time (deny-list stems are fail-open for unknown keys like `value`).
+**Depends on / blocked by:** Must land before T3 merges.
+
+## Content-Security-Policy with Next nonce plumbing (pre-T4)
+
+**What:** A real CSP (script-src nonces via Next middleware, frame-ancestors, connect-src pinned to Convex/Sentry).
+**Why:** T1 ships the safe baseline headers (HSTS, nosniff, X-Frame-Options DENY, Referrer-Policy) in `next.config.ts`; a full CSP needs nonce plumbing that's easy to get silently wrong, so it's deferred to before real capture data exists.
+**Context:** /ship adversarial review 2026-07-21 (Codex P2).
+**Depends on / blocked by:** Before T4 (first user data in the app).
+
+## CI check that convex/_generated matches schema (needs deployment)
+
+**What:** A CI step running `npx convex codegen` + `git diff --exit-code convex/_generated` so committed generated bindings can't drift from `convex/schema.ts`.
+**Why:** `_generated` is committed (T1 hand-established; codegen requires a configured deployment, and `npx convex login` is interactive). Once the real Convex project exists (T2), codegen can run headlessly in CI with a deploy key.
+**Context:** /ship red-team review 2026-07-21.
+**Depends on / blocked by:** T2 Convex deployment + CONVEX_DEPLOY_KEY secret.
+
 ## Full DESIGN.md via /design-consultation (pre-SaaS)
 
 **What:** A real design system doc — exact palette values, spacing scale, component inventory — beyond plan §5.6's token summary.
