@@ -1,0 +1,34 @@
+{
+  "name": "executive-prosthesis",
+  "version": "0.1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "codegen": "convex codegen",
+    "icons": "node scripts/generate-icons.mjs"
+  },
+  "dependencies": {
+    "@sentry/nextjs": "^10.67.0",
+    "convex": "^1.42.3",
+    "next": "^16.2.11",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@edge-runtime/vm": "^5.0.0",
+    "@types/node": "^26.1.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "convex-test": "^0.0.54",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "^16.2.11",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.10"
+  }
+}
