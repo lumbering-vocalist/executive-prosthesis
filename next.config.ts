@@ -3,6 +3,10 @@ import { withSentryConfig } from "@sentry/nextjs";
 
 const nextConfig: NextConfig = {
   poweredByHeader: false,
+  // Dev-only setting: Next 16 blocks dev-resource requests from origins other
+  // than localhost, which leaves pages served at 127.0.0.1 unhydrated (dead
+  // click handlers). Allow the loopback IP alias explicitly.
+  allowedDevOrigins: ["127.0.0.1"],
   // Baseline hardening for an app that will hold personal capture data.
   // A full CSP needs Next's nonce plumbing — tracked in TODOS, pre-T4.
   headers: async () => [

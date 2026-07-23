@@ -1,4 +1,6 @@
 import type { Metadata, Viewport } from "next";
+import { ConvexAuthNextjsServerProvider } from "@convex-dev/auth/nextjs/server";
+import { ConvexClientProvider } from "./ConvexClientProvider";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -29,20 +31,24 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en">
-      <head>
-        {/* Figtree preloaded at T1 (§5.6) */}
-        <link
-          rel="preload"
-          href="/fonts/figtree-latin-var.woff2"
-          as="font"
-          type="font/woff2"
-          crossOrigin="anonymous"
-        />
-      </head>
-      <body>
-        <main className="app-column">{children}</main>
-      </body>
-    </html>
+    <ConvexAuthNextjsServerProvider>
+      <html lang="en">
+        <head>
+          {/* Figtree preloaded at T1 (§5.6) */}
+          <link
+            rel="preload"
+            href="/fonts/figtree-latin-var.woff2"
+            as="font"
+            type="font/woff2"
+            crossOrigin="anonymous"
+          />
+        </head>
+        <body>
+          <ConvexClientProvider>
+            <main className="app-column">{children}</main>
+          </ConvexClientProvider>
+        </body>
+      </html>
+    </ConvexAuthNextjsServerProvider>
   );
 }
