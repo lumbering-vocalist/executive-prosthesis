@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
 import {
+  redactExceptionValue,
   scrubEvent,
   SENSITIVE_KEYS,
   SCRUB_MAX_DEPTH,
@@ -94,7 +95,7 @@ test("sensitive-key matching catches naming variants but not lookalikes", () => 
   });
 });
 
-test("exception values are length-capped", () => {
+test("exception values are length-capped as the backstop", () => {
   const long = "x".repeat(1000);
   const event = scrubEvent({
     exception: { values: [{ type: "SyntaxError", value: long }] },
@@ -102,13 +103,62 @@ test("exception values are length-capped", () => {
   expect(event.exception!.values![0].value!.length).toBeLessThanOrEqual(301);
 });
 
-test("exception messages are kept (code-authored diagnostics, §13 policy)", () => {
+test("unquoted exception prose is kept (code-authored diagnostics, §13 policy)", () => {
   // The standing rule: never interpolate capture content into thrown errors.
-  // Revisit at T4 when capture text first exists in the app.
+  // The scrub targets the channels that echo data; plain prose survives.
   const event = scrubEvent({
     exception: { values: [{ type: "Error", value: "IndexedDB open failed" }] },
   });
   expect(event.exception.values[0].value).toBe("IndexedDB open failed");
+});
+
+test("JSON.parse SyntaxError input echoes are redacted (V8 quotes the payload)", () => {
+  const payload = "took the kids to the lab before noon";
+  let thrown = "";
+  try {
+    JSON.parse(payload);
+  } catch (error) {
+    thrown = (error as Error).message;
+  }
+  // Real V8 message, e.g.: Unexpected token 't', "took the ki"... is not valid JSON
+  const event = scrubEvent({
+    exception: { values: [{ type: "SyntaxError", value: thrown }] },
+  });
+  const value = event.exception!.values![0].value!;
+  expect(value).not.toContain("took the");
+  expect(value).toContain("is not valid JSON");
+});
+
+test("Convex validator echoes are redacted: quoted values, Value: tails, object literals", () => {
+  const cases = [
+    `ArgumentValidationError: Value does not match validator. Path: .text Value: "pick up the meds"`,
+    `ArgumentValidationError: Value does not match validator. Path: .args Value: {text: "pick up the meds", when: "noon"}`,
+    "Unexpected value `pick up the meds` for field",
+    "bad input: 'pick up the meds' is not a capture",
+  ];
+  for (const raw of cases) {
+    const event = scrubEvent({
+      exception: { values: [{ type: "Error", value: raw }] },
+    });
+    expect(event.exception!.values![0].value, raw).not.toContain(
+      "pick up the meds",
+    );
+  }
+});
+
+test("redactExceptionValue keeps surrounding prose and redacts every quote style", () => {
+  expect(redactExceptionValue(`before "secret" after`)).toBe(
+    "before [scrubbed] after",
+  );
+  expect(redactExceptionValue("before 'secret' after")).toBe(
+    "before [scrubbed] after",
+  );
+  expect(redactExceptionValue("before `secret` after")).toBe(
+    "before [scrubbed] after",
+  );
+  expect(redactExceptionValue(`escaped "a \\" b" tail`)).toBe(
+    "escaped [scrubbed] tail",
+  );
 });
 
 test("every sensitive key is redacted at any nesting depth", () => {

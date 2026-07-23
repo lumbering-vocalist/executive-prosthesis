@@ -13,11 +13,15 @@
  *    breadcrumb messages (console logs land here) are redacted outright;
  *    request bodies/cookies/headers/query strings are dropped — the capture
  *    endpoint's payload IS user content.
- *  - exception.values[].value is the one free-text channel kept: error
- *    messages are Sentry's core diagnostic and are code-authored. The
- *    standing rule is never to interpolate capture content into thrown
- *    errors; revisit with a content-tagging redactor at T4 when capture
- *    text first exists in the app.
+ *  - exception.values[].value is the one free-text channel kept, pattern-
+ *    scrubbed (pre-T3 hardening): error messages are Sentry's core
+ *    diagnostic, but runtime errors echo their input — V8's JSON.parse
+ *    SyntaxError quotes the parsed payload, Convex validators echo argument
+ *    values. Anything the message quotes, any object literal, and anything
+ *    after a "Value:" marker is treated as data and redacted; see
+ *    redactExceptionValue. The standing rule never to interpolate capture
+ *    content into thrown errors still applies — the scrub enforces it
+ *    against errors we don't author.
  */
 
 export const SENSITIVE_KEYS = [
@@ -39,6 +43,9 @@ export const SENSITIVE_KEYS = [
   // Sentry's console integration stores raw console args here — the channel
   // a stray console.log(captureText) would ride.
   "arguments",
+  // Validator payloads and generic wrappers land under value/values — the
+  // review's named example of a key the deny-list was fail-open for.
+  "value",
 ] as const;
 
 export const SCRUB_MAX_DEPTH = 10;
@@ -73,11 +80,30 @@ function stripQuery(url: string): string {
   return base.replace(/\/\/[^/@]*@/, "//");
 }
 
-// Exception values are kept (see header) but bounded: runtime errors like
-// JSON.parse SyntaxError echo a snippet of their input, so a cap limits how
-// much of any interpolated content could ride along. Full redaction lands
-// pre-T3 (TODOS) before capture data first flows through parsers.
 const EXCEPTION_VALUE_MAX = 300;
+
+/**
+ * Pattern-scrub for exception messages (the pre-T3 TODOS item): the parts of
+ * an error message that carry data — quoted spans in any quote style, object
+ * literals, anything after a "Value:" marker (Convex validator echoes) — are
+ * redacted; the code-authored prose around them survives as the diagnostic.
+ * Over-matching loses diagnostics, under-matching leaks content — fail
+ * closed (an apostrophe pair in prose reads as a quoted span and is
+ * scrubbed; acceptable). The length cap stays as the backstop for unquoted
+ * free-text echoes.
+ */
+export function redactExceptionValue(value: string): string {
+  let out = value
+    .replace(/"(?:[^"\\]|\\.)*"/g, REDACTED)
+    .replace(/'(?:[^'\\]|\\.)*'/g, REDACTED)
+    .replace(/`(?:[^`\\]|\\.)*`/g, REDACTED)
+    .replace(/\{[\s\S]*\}/g, REDACTED)
+    .replace(/(Value:\s*)[\s\S]+/, `$1${REDACTED}`);
+  if (out.length > EXCEPTION_VALUE_MAX) {
+    out = out.slice(0, EXCEPTION_VALUE_MAX) + "…";
+  }
+  return out;
+}
 
 function scrubValue(value: unknown, depth = 0, key = ""): unknown {
   if (typeof value === "string" && isUrlKey(key)) return stripQuery(value);
@@ -129,8 +155,7 @@ export function scrubEvent<
   delete (event as { logentry?: unknown }).logentry;
   if (event.exception?.values) {
     for (const ex of event.exception.values) {
-      if (ex.value && ex.value.length > EXCEPTION_VALUE_MAX)
-        ex.value = ex.value.slice(0, EXCEPTION_VALUE_MAX) + "…";
+      if (ex.value) ex.value = redactExceptionValue(ex.value);
     }
   }
   if (event.request) {

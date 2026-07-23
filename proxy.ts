@@ -7,10 +7,9 @@ import {
 const isSignInPage = createRouteMatcher(["/signin"]);
 
 // T2: every page requires the signed-in founder; /signin is the only
-// unauthenticated page. Static assets (anything with a file extension) and
-// Next internals are excluded by the matcher below, so the manifest, icons,
-// and fonts keep loading before auth — the PWA must be installable from the
-// sign-in screen.
+// unauthenticated page. Next internals and the enumerated static assets are
+// excluded by the matcher below, so the manifest, icons, and fonts keep
+// loading before auth — the PWA must be installable from the sign-in screen.
 export default convexAuthNextjsMiddleware(
   async (request, { convexAuth }) => {
     const authed = await convexAuth.isAuthenticated();
@@ -29,5 +28,14 @@ export default convexAuthNextjsMiddleware(
 );
 
 export const config = {
-  matcher: ["/((?!.*\\..*|_next).*)", "/", "/(api|trpc)(.*)"],
+  // Auth runs on every route except Next internals and the enumerated
+  // pre-auth static surface (the PWA must be installable from the sign-in
+  // screen: manifest, icons, fonts, favicon). Enumerated deliberately — the
+  // old "anything with a dot" exclusion was a latent auth bypass for any
+  // future route like /export/data.json (review P2). A new static asset that
+  // isn't listed here fails safe: it redirects to /signin instead of leaking.
+  // The Convex authed* wrappers remain the real enforcement either way.
+  matcher: [
+    "/((?!_next/|icons/|fonts/|favicon\\.ico$|manifest\\.webmanifest$).*)",
+  ],
 };
