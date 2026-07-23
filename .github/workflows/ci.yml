@@ -25,3 +25,6 @@ jobs:
         env:
           # No Sentry upload in CI; init is a no-op without a DSN.
           SENTRY_SUPPRESS_TURBOPACK_WARNING: "1"
+          # ConvexReactClient is constructed at module scope during prerender;
+          # the build never opens a connection, so a placeholder URL is enough.
+          NEXT_PUBLIC_CONVEX_URL: "https://placeholder.convex.cloud"
