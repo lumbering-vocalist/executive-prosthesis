@@ -1,5 +1,8 @@
 import { defineSchema } from "convex/server";
+import { authTables } from "@convex-dev/auth/server";
 
-// Tables land at T3 (engineering-plan.md §3). T1 ships the empty schema so
-// codegen, convex-test, and CI are proven before any data exists.
-export default defineSchema({});
+// Domain tables land at T3 (engineering-plan.md §3). T2 adds only Convex
+// Auth's own tables (users, authAccounts, authSessions, ...).
+export default defineSchema({
+  ...authTables,
+});
