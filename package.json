@@ -1,6 +1,6 @@
 {
   "name": "executive-prosthesis",
-  "version": "0.1.0.0",
+  "version": "0.2.0.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -14,8 +14,11 @@
     "icons": "node scripts/generate-icons.mjs"
   },
   "dependencies": {
+    "@auth/core": "^0.41.1",
+    "@convex-dev/auth": "^0.0.94",
     "@sentry/nextjs": "^10.67.0",
     "convex": "^1.42.3",
+    "convex-helpers": "^0.1.120",
     "next": "^16.2.11",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
@@ -28,6 +31,7 @@
     "convex-test": "^0.0.54",
     "eslint": "^9.39.5",
     "eslint-config-next": "^16.2.11",
+    "jose": "^6.2.4",
     "typescript": "^6.0.3",
     "vitest": "^4.1.10"
   }
