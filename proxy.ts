@@ -35,15 +35,18 @@ export const config = {
   // future route like /export/data.json (review P2). A new static asset that
   // isn't listed here fails safe: it redirects to /signin instead of leaking.
   // The Convex authed* wrappers remain the real enforcement either way.
-  // Concrete files, not whole namespaces: excluding `icons/` wholesale would
-  // let a future `/icons/export` route through unauthenticated — the same
-  // shape as the dotted-path hole this replaced.
+  // The literal files that ship, not namespaces or wildcards: excluding
+  // `icons/` wholesale — or even `icons/*.png` — would let a future route
+  // like `/icons/export.png` through unauthenticated, the same shape as the
+  // dotted-path hole this replaced. A new asset must be added here, and
+  // until it is it simply requires auth. (No favicon.ico ships; the icons
+  // come from app/layout.tsx metadata and the manifest.)
   //
   // INVARIANT: `/api/auth` MUST keep matching. Convex Auth's sign-in,
   // sign-out, and token refresh are all POSTs to it, proxied by
   // convexAuthNextjsMiddleware — excluding it 404s every auth action.
   // tests/proxy-matcher.test.ts asserts this.
   matcher: [
-    "/((?!_next/|icons/[^/]+\\.png$|fonts/[^/]+\\.woff2$|favicon\\.ico$|manifest\\.webmanifest$).*)",
+    "/((?!_next/|icons/icon-192\\.png$|icons/icon-512\\.png$|icons/apple-touch-icon\\.png$|fonts/figtree-latin-var\\.woff2$|fonts/figtree-latin-ext-var\\.woff2$|manifest\\.webmanifest$).*)",
   ],
 };

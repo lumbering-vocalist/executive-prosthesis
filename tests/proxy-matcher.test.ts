@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { expect, test } from "vitest";
 
 /*
@@ -55,8 +56,10 @@ test("the pre-auth static surface is excluded so the PWA stays installable", () 
   for (const path of [
     "/_next/static/chunks/main.js",
     "/icons/icon-192.png",
+    "/icons/icon-512.png",
+    "/icons/apple-touch-icon.png",
     "/fonts/figtree-latin-var.woff2",
-    "/favicon.ico",
+    "/fonts/figtree-latin-ext-var.woff2",
     "/manifest.webmanifest",
   ]) {
     expect(runsAuth(path), path).toBe(false);
@@ -108,18 +111,34 @@ test("INVARIANT: /api/auth runs the middleware — excluding it breaks all auth"
   expect(runsAuth("/api/auth/callback")).toBe(true);
 });
 
-test("static exclusions are concrete files, not whole namespaces", () => {
-  // Excluding `icons/` wholesale would let a future route under it skip auth,
-  // which is the same shape as the dotted-path hole this replaced.
+test("static exclusions are literal filenames, not namespaces or wildcards", () => {
+  // Excluding `icons/` wholesale — or even `icons/*.png` — would let a
+  // future route under it skip auth, the same shape as the dotted-path hole
+  // this replaced. Only the files that actually ship are named.
   for (const path of [
     "/icons/export",
+    "/icons/export.png",
     "/icons/nested/secret.png",
     "/fonts/admin",
+    "/fonts/admin.woff2",
     "/fonts/subdir/other.woff2",
   ]) {
     expect(runsAuth(path), path).toBe(true);
   }
-  // The real assets stay excluded.
-  expect(runsAuth("/icons/icon-512.png")).toBe(false);
-  expect(runsAuth("/fonts/figtree-latin-ext-var.woff2")).toBe(false);
+});
+
+test("every excluded asset in the matcher actually exists on disk", () => {
+  // An exclusion for a file that doesn't ship is dead weight that reads as a
+  // deliberate hole; one for a file that ships under a different name breaks
+  // the PWA. Keep the list honest against public/.
+  const excluded = [...matcherPatterns()[0].matchAll(/([\w./-]+\\\.\w+)\$/g)]
+    .map((m) => m[1].replace(/\\/g, ""))
+    .filter((p) => !p.startsWith("manifest"));
+  expect(excluded.length).toBeGreaterThan(0);
+  for (const asset of excluded) {
+    expect(
+      existsSync(new URL(`../public/${asset}`, import.meta.url)),
+      `matcher excludes /${asset}, which is not in public/`,
+    ).toBe(true);
+  }
 });
