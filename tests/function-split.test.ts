@@ -64,6 +64,30 @@ function bannedNames(names: string, banned: string[]): string[] {
     .filter((n) => banned.includes(n));
 }
 
+function namespaceImportsConvexServer(source: string): boolean {
+  return new RegExp(
+    String.raw`import\s+\*\s+as\s+\w+\s*from\s*` + CONVEX_SERVER,
+  ).test(source);
+}
+
+function smugglesGeneratedServer(source: string): boolean {
+  return (
+    new RegExp(
+      String.raw`import\s+(\*\s+as\s+\w+|\w+\s*,|\w+\s+from)[^;]*` +
+        GENERATED_SERVER,
+    ).test(source) ||
+    new RegExp(
+      String.raw`import\s*\(\s*` + GENERATED_SERVER + String.raw`\s*\)`,
+    ).test(source)
+  );
+}
+
+function reExportsGeneratedServer(source: string): boolean {
+  return new RegExp(
+    String.raw`export\s+(?!type\b)[^;]*from\s*` + GENERATED_SERVER,
+  ).test(source);
+}
+
 test("only functions.ts imports the raw public builders", () => {
   for (const [file, source] of Object.entries(sources)) {
     if (SANCTIONED.includes(file)) continue;
@@ -95,11 +119,8 @@ test("no module reaches the public builders via convex/server generics", () => {
           `convex/functions.ts or the internal* builders`,
       ).toEqual([]);
     }
-    const namespace = new RegExp(
-      String.raw`import\s+\*\s+as\s+\w+\s*from\s*` + CONVEX_SERVER,
-    ).test(source);
     expect(
-      namespace,
+      namespaceImportsConvexServer(source),
       `${file} namespace-imports convex/server, which reaches the *Generic ` +
         `public builders — import what you need by name`,
     ).toBe(false);
@@ -112,16 +133,8 @@ test("no module smuggles builders via namespace, default, or dynamic imports", (
   // namespace imports (`import type * as`) stay allowed — they can't execute.
   for (const [file, source] of Object.entries(sources)) {
     if (SANCTIONED.includes(file)) continue;
-    const smuggled =
-      new RegExp(
-        String.raw`import\s+(\*\s+as\s+\w+|\w+\s*,|\w+\s+from)[^;]*` +
-          GENERATED_SERVER,
-      ).test(source) ||
-      new RegExp(String.raw`import\s*\(\s*` + GENERATED_SERVER + String.raw`\s*\)`).test(
-        source,
-      );
     expect(
-      smuggled,
+      smugglesGeneratedServer(source),
       `${file} imports ./_generated/server via a namespace/default/dynamic ` +
         `import — use the authed* wrappers from convex/functions.ts or the ` +
         `internal* builders`,
@@ -135,14 +148,118 @@ test("no module re-exports from _generated/server", () => {
   // `export type` stays allowed — types can't execute.
   for (const [file, source] of Object.entries(sources)) {
     if (SANCTIONED.includes(file)) continue;
-    const reExported = new RegExp(
-      String.raw`export\s+(?!type\b)[^;]*from\s*` + GENERATED_SERVER,
-    ).test(source);
     expect(
-      reExported,
+      reExportsGeneratedServer(source),
       `${file} re-exports from ./_generated/server — the raw builders must ` +
         `not escape convex/functions.ts`,
     ).toBe(false);
+  }
+});
+
+/*
+ * Negative controls. Every test above asserts "the repo contains no
+ * violation" — which is also what a silently broken regex would report. These
+ * run the same detectors against synthetic violating sources, so the suite
+ * fails if it ever stops detecting anything.
+ */
+
+function bannedFromGenerated(source: string): string[] {
+  return namedImports(source, GENERATED_SERVER)
+    .filter(([, typeOnly]) => !typeOnly)
+    .flatMap(([, , names]) => bannedNames(names, PUBLIC_BUILDERS));
+}
+
+function bannedFromConvexServer(source: string): string[] {
+  return namedImports(source, CONVEX_SERVER)
+    .filter(([, typeOnly]) => !typeOnly)
+    .flatMap(([, , names]) => bannedNames(names, PUBLIC_GENERIC_BUILDERS));
+}
+
+test("the named-import detector fires on real violations, in both quote styles", () => {
+  expect(bannedFromGenerated(`import { query } from "./_generated/server";`)).toEqual(
+    ["query"],
+  );
+  expect(bannedFromGenerated(`import { mutation } from './_generated/server'`)).toEqual(
+    ["mutation"],
+  );
+  expect(
+    bannedFromGenerated(`import { action } from "../../_generated/server.js";`),
+  ).toEqual(["action"]);
+  expect(
+    bannedFromGenerated(
+      `import { internalQuery, httpAction, mutation } from "./_generated/server";`,
+    ),
+  ).toEqual(["httpAction", "mutation"]);
+  // Aliasing must not launder the builder.
+  expect(
+    bannedFromGenerated(`import { query as q } from "./_generated/server";`),
+  ).toEqual(["query"]);
+});
+
+test("the named-import detector does not fire on the allowed shapes", () => {
+  for (const ok of [
+    `import { internalQuery, internalMutation } from "./_generated/server";`,
+    `import type { QueryCtx, MutationCtx } from "./_generated/server";`,
+    `import { type QueryCtx, internalAction } from "./_generated/server";`,
+    `import { query } from "./functions";`,
+  ]) {
+    expect(bannedFromGenerated(ok), ok).toEqual([]);
+  }
+});
+
+test("the convex/server generic detector fires on real violations", () => {
+  expect(
+    bannedFromConvexServer(`import { queryGeneric } from "convex/server";`),
+  ).toEqual(["queryGeneric"]);
+  expect(
+    bannedFromConvexServer(
+      `import { httpRouter, actionGeneric } from 'convex/server'`,
+    ),
+  ).toEqual(["actionGeneric"]);
+  // httpRouter/defineSchema alone are legitimate (convex/http.ts uses them).
+  expect(
+    bannedFromConvexServer(`import { httpRouter } from "convex/server";`),
+  ).toEqual([]);
+  expect(namespaceImportsConvexServer(`import * as s from "convex/server";`)).toBe(
+    true,
+  );
+  expect(
+    namespaceImportsConvexServer(`import { httpRouter } from "convex/server";`),
+  ).toBe(false);
+});
+
+test("the smuggling detector fires on namespace, default, and dynamic imports", () => {
+  for (const bad of [
+    `import * as server from "./_generated/server";`,
+    `import server from "./_generated/server";`,
+    `import server, { internalQuery } from "./_generated/server";`,
+    `import("./_generated/server")`,
+    `import( "../_generated/server.js" )`,
+  ]) {
+    expect(smugglesGeneratedServer(bad), bad).toBe(true);
+  }
+  for (const ok of [
+    `import { internalQuery } from "./_generated/server";`,
+    `import type * as s from "./_generated/server";`,
+    `import * as server from "./functions";`,
+  ]) {
+    expect(smugglesGeneratedServer(ok), ok).toBe(false);
+  }
+});
+
+test("the re-export detector fires on value re-exports but not type re-exports", () => {
+  for (const bad of [
+    `export { query } from "./_generated/server";`,
+    `export * from "./_generated/server";`,
+    `export { mutation as m } from '../_generated/server.js';`,
+  ]) {
+    expect(reExportsGeneratedServer(bad), bad).toBe(true);
+  }
+  for (const ok of [
+    `export type { QueryCtx } from "./_generated/server";`,
+    `export { authedQuery } from "./functions";`,
+  ]) {
+    expect(reExportsGeneratedServer(ok), ok).toBe(false);
   }
 });
 

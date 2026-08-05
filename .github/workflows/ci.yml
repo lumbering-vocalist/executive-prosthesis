@@ -10,10 +10,13 @@ jobs:
   checks:
     runs-on: ubuntu-latest
     env:
-      # Secrets aren't readable in step `if:` expressions; surface presence
-      # via env so the codegen drift check can self-skip until the founder
-      # adds the CONVEX_DEPLOY_KEY repo secret (TODOS: CI codegen check).
-      CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+      # Secrets aren't readable in step `if:` expressions; surface only a
+      # PRESENCE flag at job scope so the codegen drift check can self-skip
+      # until the founder adds the CONVEX_DEPLOY_KEY repo secret. The secret
+      # itself is injected on that one step — a deploy key with full write
+      # authority must not sit in the env of `npm ci`/`npm test`, where any
+      # compromised transitive dep's postinstall could read it.
+      HAS_CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY != '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,12 +33,14 @@ jobs:
         # convex/_generated is committed; regenerate against the deployment
         # and fail if it drifted from convex/schema.ts. Self-skips (with a
         # notice, not silently green) until CONVEX_DEPLOY_KEY exists.
-        if: ${{ env.CONVEX_DEPLOY_KEY != '' }}
+        if: ${{ env.HAS_CONVEX_DEPLOY_KEY == 'true' }}
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
         run: |
           npx convex codegen
           git diff --exit-code convex/_generated
       - name: Convex codegen drift check (skipped)
-        if: ${{ env.CONVEX_DEPLOY_KEY == '' }}
+        if: ${{ env.HAS_CONVEX_DEPLOY_KEY != 'true' }}
         run: echo "::notice::codegen drift check skipped — add the CONVEX_DEPLOY_KEY repo secret to enable it"
       - run: npm run build
         env:

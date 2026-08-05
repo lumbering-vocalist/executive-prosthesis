@@ -210,6 +210,13 @@ body {
   color: var(--color-ink-secondary);
 }
 
+/* Requirements stated before the attempt, not after it (§4.5) */
+.signin-hint {
+  font-size: var(--font-size-label);
+  color: var(--color-ink-secondary);
+  margin: 0;
+}
+
 .signin-input {
   font: inherit;
   color: var(--color-ink);

@@ -52,13 +52,19 @@ function constantTimeEqual(a: string, b: string): boolean {
   return diff === 0;
 }
 
+// Sign-up has no rate limiter (Convex Auth throttles signIn only), so the
+// token itself must resist online guessing while the bootstrap window is
+// open. A founder-chosen "setup123" would resurrect the P0 this gate exists
+// to close — refuse weak configuration outright.
+export const SETUP_TOKEN_MIN_LENGTH = 16;
+
 /**
  * Account creation is a one-time, founder-only act: knowledge of the
  * allowlisted email is public information, not authorization (the T2 review's
  * P0 — anyone who learned the email could have claimed the account first).
- * The founder sets AUTH_SETUP_TOKEN, signs up once, and unsets it; while it
- * is unset, sign-up is disabled entirely. Throws on any mismatch and never
- * echoes the attempted token.
+ * The founder sets AUTH_SETUP_TOKEN (generated, e.g. `openssl rand -hex 24`),
+ * signs up once, and unsets it; while it is unset, sign-up is disabled
+ * entirely. Throws on any mismatch and never echoes the attempted token.
  */
 export function assertSetupToken(
   candidate: unknown,
@@ -67,6 +73,12 @@ export function assertSetupToken(
   if (expected === undefined || expected.trim() === "") {
     throw new Error(
       "Account creation is disabled: AUTH_SETUP_TOKEN is not configured",
+    );
+  }
+  if (expected.trim().length < SETUP_TOKEN_MIN_LENGTH) {
+    throw new Error(
+      "Account creation is disabled: AUTH_SETUP_TOKEN is too short — " +
+        `use at least ${SETUP_TOKEN_MIN_LENGTH} characters (openssl rand -hex 24)`,
     );
   }
   if (typeof candidate !== "string" || candidate.trim() === "") {

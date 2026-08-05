@@ -26,7 +26,10 @@ export default function ErrorBoundary({
       style={{
         display: "grid",
         placeItems: "center",
-        minHeight: "100vh",
+        // Renders inside layout's app-column, which reserves --dock-clearance
+        // below; subtract it (and use dvh for the iOS PWA) so this calmly
+        // centered screen never scrolls.
+        minHeight: "calc(100dvh - var(--dock-clearance))",
         textAlign: "center",
         padding: "var(--space-5)",
       }}

@@ -4,6 +4,7 @@ import { useAuthActions } from "@convex-dev/auth/react";
 import * as Sentry from "@sentry/nextjs";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { PASSWORD_MIN_LENGTH } from "@/convex/allowlist";
 
 /*
  * The one unauthenticated page (T2). Single user, so no marketing shell —
@@ -21,8 +22,8 @@ import { useState } from "react";
 // generic server errors. The two need different copy — "try again" is wrong
 // advice when the server is unreachable — and only infrastructure failures
 // are Sentry-worthy (§13); a mistyped password is not an app error, and
-// capturing every attempt would be noise.
-function isInfrastructureError(error: unknown): boolean {
+// capturing every attempt would be noise. Exported for tests.
+export function isInfrastructureError(error: unknown): boolean {
   return (
     error instanceof TypeError ||
     (error instanceof Error && /fetch|network|connect/i.test(error.message))
@@ -64,7 +65,7 @@ export default function SignInPage() {
         setError(
           flow === "signIn"
             ? "That didn't match. Take your time and try again."
-            : "Couldn't create the account. This is a single-person system — it takes the configured email, the setup token, and a password of at least 12 characters.",
+            : "Couldn't create the account. This is a single-person system — check the email, the setup token, and the password.",
         );
       }
     } finally {
@@ -99,11 +100,14 @@ export default function SignInPage() {
           name="password"
           type="password"
           autoComplete={flow === "signIn" ? "current-password" : "new-password"}
-          minLength={flow === "signUp" ? 12 : undefined}
+          minLength={flow === "signUp" ? PASSWORD_MIN_LENGTH : undefined}
           required
         />
         {flow === "signUp" && (
           <>
+            <p className="signin-hint">
+              At least {PASSWORD_MIN_LENGTH} characters.
+            </p>
             <label className="signin-label" htmlFor="confirmPassword">
               Password again
             </label>
@@ -113,7 +117,7 @@ export default function SignInPage() {
               name="confirmPassword"
               type="password"
               autoComplete="new-password"
-              minLength={12}
+              minLength={PASSWORD_MIN_LENGTH}
               required
             />
             <label className="signin-label" htmlFor="setupToken">
@@ -127,6 +131,9 @@ export default function SignInPage() {
               autoComplete="off"
               required
             />
+            <p className="signin-hint">
+              The one-time AUTH_SETUP_TOKEN from your deployment environment.
+            </p>
           </>
         )}
         {error !== null && (

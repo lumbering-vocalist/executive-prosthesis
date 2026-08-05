@@ -161,6 +161,147 @@ test("redactExceptionValue keeps surrounding prose and redacts every quote style
   );
 });
 
+test("an apostrophe inside echoed content cannot close the quoted span early", () => {
+  // Quote-PAIRING per style leaked here: 'don' would match as the span and
+  // ship the rest. The greedy first-to-last rule must take the whole thing.
+  const out = redactExceptionValue(
+    "bad input: 'don't forget the neurologist appointment at 4pm' is not a capture",
+  );
+  expect(out).not.toContain("forget the neurologist");
+  expect(out).not.toContain("4pm");
+  const mixed = redactExceptionValue(
+    `Unexpected token 's', "say "meet the neurologist" at three"... is not valid JSON`,
+  );
+  expect(mixed).not.toContain("neurologist");
+});
+
+test("an unterminated quote redacts to end-of-string (truncated echoes)", () => {
+  const out = redactExceptionValue(
+    "Unexpected string: 'my secret capture text that got truncat",
+  );
+  expect(out).not.toContain("secret capture");
+  expect(out).toContain("Unexpected string: ");
+});
+
+test("an unclosed object literal redacts to end-of-string", () => {
+  const out = redactExceptionValue(
+    "bad input {name: pick up the meds at the pharmacy",
+  );
+  expect(out).not.toContain("pick up the meds");
+  expect(out).toContain("bad input ");
+});
+
+test("the Value: marker is matched case-insensitively", () => {
+  const out = redactExceptionValue("invalid value: pick up the meds at noon");
+  expect(out).not.toContain("pick up the meds");
+});
+
+test("oversized exception values are redacted wholesale before pattern work", () => {
+  // beforeSend is synchronous; giant echoes get no regex time at all.
+  const out = redactExceptionValue("Error: " + `\\"`.repeat(100_000));
+  expect(out).toBe("[scrubbed]");
+});
+
+test("stacktrace frame locals never ship", () => {
+  // includeLocalVariables/ANR captures attach whole program state as
+  // frame.vars — the one frame field that can carry capture text.
+  const event = scrubEvent({
+    exception: {
+      values: [
+        {
+          type: "Error",
+          value: "boom",
+          stacktrace: {
+            frames: [
+              {
+                filename: "app/page.tsx",
+                vars: { captureText: "pick up the meds" },
+              },
+            ],
+          },
+        },
+      ],
+    },
+  });
+  expect(JSON.stringify(event)).not.toContain("pick up the meds");
+  expect(
+    event.exception!.values![0].stacktrace!.frames![0].filename,
+  ).toBe("app/page.tsx");
+});
+
+test("the parameterized message channel (logentry) is dropped entirely", () => {
+  // captureMessage("saw %s", captureText) lands in logentry, not message —
+  // redacting only `message` would leave the params shipping.
+  const event = scrubEvent({
+    message: "saw %s",
+    logentry: { message: "saw %s", params: ["pick up the meds"] },
+  } as { message?: string } & Record<string, unknown>);
+  expect((event as Record<string, unknown>).logentry).toBeUndefined();
+  expect("logentry" in event).toBe(false);
+  expect(JSON.stringify(event)).not.toContain("pick up the meds");
+});
+
+test("request.env is dropped along with bodies and headers", () => {
+  const event = scrubEvent({
+    request: {
+      url: "https://x.test/held",
+      env: { REMOTE_ADDR: "1.2.3.4", SERVER_NAME: "host" },
+    } as Record<string, unknown>,
+  });
+  expect((event.request as Record<string, unknown>).env).toBeUndefined();
+  expect(JSON.stringify(event)).not.toContain("1.2.3.4");
+});
+
+test("the exception length cap is inclusive and only truncates past it", () => {
+  const at = "x".repeat(300);
+  expect(redactExceptionValue(at)).toBe(at);
+  const over = redactExceptionValue("x".repeat(301));
+  expect(over.length).toBe(301);
+  expect(over.endsWith("…")).toBe(true);
+});
+
+test("empty, missing, and null exception channels pass through untouched", () => {
+  const event = scrubEvent({
+    exception: { values: [{ type: "Error", value: "" }, { type: "Error" }] },
+  });
+  expect(event.exception!.values![0].value).toBe("");
+  expect(event.exception!.values![1].value).toBeUndefined();
+  expect(scrubEvent({ exception: null }).exception).toBeNull();
+  expect(scrubEvent({ exception: { values: [] } }).exception).toEqual({
+    values: [],
+  });
+});
+
+test("the `value` key is redacted under every wrapper shape (review's fail-open)", () => {
+  // The named example the deny-list used to miss: validator payloads land
+  // under value/values, at any nesting, inside arrays too.
+  const event = scrubEvent({
+    extra: {
+      value: "pick up the meds",
+      values: ["pick up the meds"],
+      nested: { fieldValue: "kept — not a prefix match", value: "secret" },
+    },
+    contexts: { validator: { value: "pick up the meds" } },
+  });
+  const flat = JSON.stringify(event);
+  expect(flat).not.toContain("pick up the meds");
+  expect(flat).not.toContain("secret");
+  const nested = (event.extra as Record<string, unknown>).nested as Record<
+    string,
+    unknown
+  >;
+  expect(nested.fieldValue).toBe("kept — not a prefix match");
+});
+
+test("spans without a description or data survive scrubbing", () => {
+  const event = scrubEvent({
+    spans: [{}, { description: "GET /held" }, { data: {} }],
+  });
+  expect(event.spans![0]).toEqual({});
+  expect(event.spans![1].description).toBe("GET /held");
+  expect(event.spans![2].data).toEqual({});
+});
+
 test("every sensitive key is redacted at any nesting depth", () => {
   for (const key of SENSITIVE_KEYS) {
     const event = scrubEvent({

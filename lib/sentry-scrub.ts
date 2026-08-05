@@ -84,21 +84,28 @@ const EXCEPTION_VALUE_MAX = 300;
 
 /**
  * Pattern-scrub for exception messages (the pre-T3 TODOS item): the parts of
- * an error message that carry data — quoted spans in any quote style, object
- * literals, anything after a "Value:" marker (Convex validator echoes) — are
- * redacted; the code-authored prose around them survives as the diagnostic.
- * Over-matching loses diagnostics, under-matching leaks content — fail
- * closed (an apostrophe pair in prose reads as a quoted span and is
- * scrubbed; acceptable). The length cap stays as the backstop for unquoted
- * free-text echoes.
+ * an error message that carry data — quoted spans, object literals, anything
+ * after a "Value:" marker (Convex validator echoes) — are redacted; the
+ * code-authored prose around them survives as the diagnostic. Over-matching
+ * loses diagnostics, under-matching leaks content — fail closed. Concretely:
+ *  - Quotes are NOT matched in pairs per style: an apostrophe inside echoed
+ *    content ("don't") would close a paired span early and leak the tail.
+ *    Instead one greedy span runs from the first quote character of any
+ *    style to the last; a lone unterminated quote redacts to end-of-string.
+ *  - An object literal redacts from its opening "{" to end-of-string — a
+ *    truncated echo may never close the brace.
+ *  - Inputs far beyond the cap are redacted wholesale before any regex runs:
+ *    the pattern work is O(n) but there is no diagnostic value past the cap,
+ *    and beforeSend runs synchronously on the main thread.
+ * The length cap stays as the backstop for unquoted free-text echoes.
  */
 export function redactExceptionValue(value: string): string {
+  if (value.length > EXCEPTION_VALUE_MAX * 8) return REDACTED;
   let out = value
-    .replace(/"(?:[^"\\]|\\.)*"/g, REDACTED)
-    .replace(/'(?:[^'\\]|\\.)*'/g, REDACTED)
-    .replace(/`(?:[^`\\]|\\.)*`/g, REDACTED)
-    .replace(/\{[\s\S]*\}/g, REDACTED)
-    .replace(/(Value:\s*)[\s\S]+/, `$1${REDACTED}`);
+    .replace(/['"`][\s\S]*['"`]/, REDACTED)
+    .replace(/['"`][\s\S]*$/, REDACTED)
+    .replace(/\{[\s\S]*$/, REDACTED)
+    .replace(/(value:\s*)[\s\S]+/i, `$1${REDACTED}`);
   if (out.length > EXCEPTION_VALUE_MAX) {
     out = out.slice(0, EXCEPTION_VALUE_MAX) + "…";
   }
@@ -130,7 +137,15 @@ export function scrubEvent<
   E extends {
     message?: string;
     // Exception values are the one kept free-text channel (see header).
-    exception?: { values?: { type?: string; value?: string }[] } | null;
+    exception?: {
+      values?: {
+        type?: string;
+        value?: string;
+        // Structurally loose so Sentry's StackFrame assigns; only `vars`
+        // (frame-local variables) is touched.
+        stacktrace?: { frames?: { vars?: unknown; filename?: string }[] } | null;
+      }[];
+    } | null;
     request?:
       | {
           data?: unknown;
@@ -156,6 +171,14 @@ export function scrubEvent<
   if (event.exception?.values) {
     for (const ex of event.exception.values) {
       if (ex.value) ex.value = redactExceptionValue(ex.value);
+      // Frame-local variables (includeLocalVariables / ANR captures) are
+      // whole program state — the one frame field that can carry capture
+      // text. Dropped wholesale rather than scrubbed: fail closed.
+      if (ex.stacktrace?.frames) {
+        for (const frame of ex.stacktrace.frames) {
+          delete frame.vars;
+        }
+      }
     }
   }
   if (event.request) {

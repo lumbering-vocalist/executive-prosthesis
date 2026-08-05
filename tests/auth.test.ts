@@ -98,6 +98,35 @@ test("rotating AUTH_ALLOWED_EMAIL revokes already-issued sessions", async () => 
   );
 });
 
+test("fail-closed: a user row with no email is not a principal", async () => {
+  // requireUserId leans on assertAllowedEmail to reject non-strings, so an
+  // anomalous row (Convex Auth's users.email is optional) can't slip through
+  // as an authenticated caller.
+  const t = convexTest(schema, modules);
+  const userId = await t.run(async (ctx) => ctx.db.insert("users", {}));
+  const anomalous = t.withIdentity({ subject: `${userId}|test-session` });
+  await expect(anomalous.query(api.users.viewer, {})).rejects.toThrow(
+    /requires an email/,
+  );
+  await expect(
+    anomalous.query(internal.functions.checkPrincipal, {}),
+  ).rejects.toThrow(/requires an email/);
+});
+
+test("fail-closed: unsetting AUTH_ALLOWED_EMAIL revokes live sessions", async () => {
+  // Rotation is covered above; the unset case is the operational one (env var
+  // dropped during a redeploy) and takes the "disabled" branch instead.
+  const t = convexTest(schema, modules);
+  const userId = await t.run(async (ctx) =>
+    ctx.db.insert("users", { email: FOUNDER }),
+  );
+  const asFounder = t.withIdentity({ subject: `${userId}|test-session` });
+  delete process.env.AUTH_ALLOWED_EMAIL;
+  await expect(asFounder.query(api.users.viewer, {})).rejects.toThrow(
+    /disabled/,
+  );
+});
+
 test("checkPrincipal (the authedAction path) runs the same principal checks", async () => {
   const t = convexTest(schema, modules);
   await expect(t.query(internal.functions.checkPrincipal, {})).rejects.toThrow(
@@ -192,6 +221,57 @@ test("P1 policy: passwords under 12 characters are rejected on sign-up", async (
     t.action(api.auth.signIn, signUpParams({ password: "short-pw" })),
   ).rejects.toThrow();
   expect(await t.run(async (ctx) => ctx.db.query("users").collect())).toEqual([]);
+});
+
+test("P1 policy: the password bounds hold through the real provider", async () => {
+  // The unit test covers assertPasswordStrength directly; this proves it is
+  // actually wired as validatePasswordRequirements on the signUp flow —
+  // both ends of the range, against the live Password provider.
+  const t = convexTest(schema, modules);
+  await expect(
+    t.action(api.auth.signIn, signUpParams({ password: "a".repeat(257) })),
+  ).rejects.toThrow();
+  expect(await t.run(async (ctx) => ctx.db.query("users").collect())).toEqual([]);
+
+  const ok = await t.action(
+    api.auth.signIn,
+    signUpParams({ password: "a".repeat(12) }),
+  );
+  expect(ok.tokens).not.toBeNull();
+  expect(
+    await t.run(async (ctx) => ctx.db.query("users").collect()),
+  ).toHaveLength(1);
+});
+
+test("the setup token is not required — and not accepted as a gate — on signIn", async () => {
+  // The gate is scoped to the signUp flow: an existing account signs in with
+  // no token at all, and a wrong token on signIn is simply an unused param
+  // rather than a second lock (the password is the credential there).
+  const t = convexTest(schema, modules);
+  await t.action(api.auth.signIn, signUpParams());
+  delete process.env.AUTH_SETUP_TOKEN;
+  const again = await t.action(api.auth.signIn, {
+    provider: "password",
+    params: { email: FOUNDER, password: PASSWORD, flow: "signIn" },
+  });
+  expect(again.tokens).not.toBeNull();
+  expect(
+    await t.run(async (ctx) => ctx.db.query("users").collect()),
+  ).toHaveLength(1);
+});
+
+test("a non-allowlisted email is rejected on signIn too, not just signUp", async () => {
+  // profile() runs on every flow of the provider, so rotating the allowlist
+  // locks out the old address at the front door as well as per-request.
+  const t = convexTest(schema, modules);
+  await t.action(api.auth.signIn, signUpParams());
+  process.env.AUTH_ALLOWED_EMAIL = "successor@example.com";
+  await expect(
+    t.action(api.auth.signIn, {
+      provider: "password",
+      params: { email: FOUNDER, password: PASSWORD, flow: "signIn" },
+    }),
+  ).rejects.toThrow();
 });
 
 test("P1 invariant: a second user can never be minted", async () => {
