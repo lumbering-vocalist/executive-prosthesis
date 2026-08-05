@@ -11,7 +11,9 @@
  * events).
  */
 
+import { ConvexError } from "convex/values";
 import {
+  NOT_CONFIGURED,
   PASSWORD_MAX_LENGTH,
   PASSWORD_MIN_LENGTH,
   SETUP_TOKEN_MIN_DISTINCT_CHARS,
@@ -19,11 +21,30 @@ import {
 } from "../lib/auth-policy";
 
 export {
+  NOT_CONFIGURED,
   PASSWORD_MAX_LENGTH,
   PASSWORD_MIN_LENGTH,
   SETUP_TOKEN_MIN_DISTINCT_CHARS,
   SETUP_TOKEN_MIN_LENGTH,
 };
+
+/*
+ * A deployment that isn't configured is an infrastructure failure, not a bad
+ * password — but Convex redacts ordinary server errors to a generic "Server
+ * Error" in production, so the sign-in screen could not tell the two apart
+ * and showed "that didn't match" for the likeliest first-run failure.
+ * ConvexError's payload survives redaction, so the client can branch on it
+ * (see isInfrastructureError in app/signin/page.tsx). The message never
+ * carries user input.
+ */
+export class NotConfiguredError extends ConvexError<{
+  code: string;
+  message: string;
+}> {
+  constructor(message: string) {
+    super({ code: NOT_CONFIGURED, message });
+  }
+}
 
 export function normalizeEmail(raw: string): string {
   return raw.trim().toLowerCase();
@@ -42,7 +63,7 @@ export function assertAllowedEmail(
     throw new Error("Sign-in requires an email address");
   }
   if (allowed === undefined || allowed.trim() === "") {
-    throw new Error(
+    throw new NotConfiguredError(
       "Sign-in is disabled: AUTH_ALLOWED_EMAIL is not configured",
     );
   }
@@ -90,7 +111,7 @@ export function assertSetupToken(
 ): void {
   const wanted = expected?.trim() ?? "";
   if (wanted === "") {
-    throw new Error(
+    throw new NotConfiguredError(
       "Account creation is disabled: AUTH_SETUP_TOKEN is not configured",
     );
   }
@@ -98,7 +119,7 @@ export function assertSetupToken(
     wanted.length < SETUP_TOKEN_MIN_LENGTH ||
     new Set(wanted).size < SETUP_TOKEN_MIN_DISTINCT_CHARS
   ) {
-    throw new Error(
+    throw new NotConfiguredError(
       "Account creation is disabled: AUTH_SETUP_TOKEN is too weak — " +
         `it needs at least ${SETUP_TOKEN_MIN_LENGTH} characters and ` +
         `${SETUP_TOKEN_MIN_DISTINCT_CHARS} distinct ones ` +

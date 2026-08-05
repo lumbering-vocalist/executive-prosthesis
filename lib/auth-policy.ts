@@ -18,3 +18,9 @@ export const PASSWORD_MAX_LENGTH = 256;
 // length AND character variety so "aaaaaaaaaaaaaaaaaaaaaaaa" fails closed.
 export const SETUP_TOKEN_MIN_LENGTH = 24;
 export const SETUP_TOKEN_MIN_DISTINCT_CHARS = 10;
+
+// Payload code on the ConvexError thrown when the deployment isn't
+// configured. Convex redacts ordinary server errors in production but
+// preserves ConvexError data, so this is what lets the sign-in screen tell a
+// misconfigured deployment from a wrong password.
+export const NOT_CONFIGURED = "not-configured";

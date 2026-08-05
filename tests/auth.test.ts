@@ -311,6 +311,20 @@ test("rotation is recoverable: sign-up on the new address reclaims the one row",
   expect(users).toHaveLength(1);
   expect(users[0].email).toBe(SUCCESSOR);
 
+  // The reclaim keeps the user id, so the predecessor's sessions would come
+  // back to life the moment requireUserId sees the new allowlisted email —
+  // handing access back to exactly whoever rotation was meant to cut off.
+  // They must be gone, refresh tokens with them.
+  const leftovers = await t.run(async (ctx) => ({
+    sessions: await ctx.db.query("authSessions").collect(),
+    refreshTokens: await ctx.db.query("authRefreshTokens").collect(),
+  }));
+  // Only the successor's freshly-minted session may remain.
+  expect(leftovers.sessions).toHaveLength(1);
+  for (const token of leftovers.refreshTokens) {
+    expect(leftovers.sessions.map((s) => s._id)).toContain(token.sessionId);
+  }
+
   // The successor can sign in; the old address cannot (it fails the
   // allowlist in `profile`, so its surviving provider account is inert).
   const back = await t.action(api.auth.signIn, {

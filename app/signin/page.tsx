@@ -4,7 +4,7 @@ import { useAuthActions } from "@convex-dev/auth/react";
 import * as Sentry from "@sentry/nextjs";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from "@/lib/auth-policy";
+import { NOT_CONFIGURED, PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from "@/lib/auth-policy";
 
 /*
  * The one unauthenticated page (T2). Single user, so no marketing shell —
@@ -29,12 +29,15 @@ import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from "@/lib/auth-policy";
 // "you typed it wrong". Exported for tests.
 export function isInfrastructureError(error: unknown): boolean {
   if (error instanceof TypeError) return true;
+  // A ConvexError payload survives Convex's production redaction, which is
+  // how a misconfigured deployment stays distinguishable from a wrong
+  // password (plain server errors all arrive as "[CONVEX] Server Error").
+  const data = (error as { data?: { code?: unknown } } | null)?.data;
+  if (data?.code === NOT_CONFIGURED) return true;
   if (!(error instanceof Error)) return false;
   return (
     error instanceof SyntaxError ||
-    /fetch|network|connect|timed out|not configured|is disabled/i.test(
-      error.message,
-    )
+    /fetch|network|connect|timed out/i.test(error.message)
   );
 }
 
@@ -44,14 +47,35 @@ export function isInfrastructureError(error: unknown): boolean {
 // ever said. Bound the wait so silence becomes a message.
 const SIGN_IN_TIMEOUT_MS = 20_000;
 
-function withTimeout<T>(work: Promise<T>): Promise<T> {
+class SignInTimeout extends Error {
+  constructor() {
+    super("Sign-in timed out waiting for the server");
+  }
+}
+
+/*
+ * The timed-out call is NOT cancelled — Convex has no abort for an in-flight
+ * action, and it may still land. Left unhandled during first-run setup that
+ * would silently create the account with a password the founder was just
+ * told had failed. So the original promise keeps its handlers: a late
+ * success navigates on, a late failure is swallowed (the timeout message is
+ * already on screen).
+ */
+function withTimeout<T>(work: Promise<T>, onLateSuccess: () => void): Promise<T> {
+  let timedOut = false;
+  work.then(
+    () => {
+      if (timedOut) onLateSuccess();
+    },
+    () => {},
+  );
   return Promise.race([
     work,
     new Promise<never>((_, reject) =>
-      setTimeout(
-        () => reject(new Error("Sign-in timed out waiting for the server")),
-        SIGN_IN_TIMEOUT_MS,
-      ),
+      setTimeout(() => {
+        timedOut = true;
+        reject(new SignInTimeout());
+      }, SIGN_IN_TIMEOUT_MS),
     ),
   ]);
 }
@@ -78,11 +102,16 @@ export default function SignInPage() {
     setBusy(true);
     setError(null);
     try {
-      await withTimeout(signIn("password", formData));
+      await withTimeout(signIn("password", formData), () => router.push("/"));
       router.push("/");
     } catch (caught) {
       // Never echo what was typed (§13); keep the tone calm.
-      if (isInfrastructureError(caught)) {
+      if (caught instanceof SignInTimeout) {
+        Sentry.captureException(caught);
+        setError(
+          "The server is taking longer than expected. This may still go through — give it a moment before trying again.",
+        );
+      } else if (isInfrastructureError(caught)) {
         Sentry.captureException(caught);
         setError(
           "Couldn't reach the server just now. Your password wasn't the problem — check the connection and try again.",

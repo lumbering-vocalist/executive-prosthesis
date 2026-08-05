@@ -145,6 +145,23 @@ test("no module smuggles builders via namespace, default, or dynamic imports", (
   }
 });
 
+test("no module re-exports the convex/server generic builders", () => {
+  // `export { queryGeneric } from "convex/server"` in a helper would let
+  // another module import the raw builder from that helper, defining an
+  // unauthenticated public query while every other check here stays green.
+  for (const [file, source] of Object.entries(sources)) {
+    if (SANCTIONED.includes(file)) continue;
+    const reExported = new RegExp(
+      String.raw`export\s+(?!type\b)[^;]*from\s*` + CONVEX_SERVER,
+    ).test(source);
+    expect(
+      reExported,
+      `${file} re-exports from convex/server — the *Generic public builders ` +
+        `must not be laundered through a helper module`,
+    ).toBe(false);
+  }
+});
+
 test("no module re-exports from _generated/server", () => {
   // `export { query } from "./_generated/server"` (or `export *`) hands the
   // raw builders to other modules without any import this suite would see.

@@ -1,6 +1,7 @@
 import { Password } from "@convex-dev/auth/providers/Password";
 import { convexAuth } from "@convex-dev/auth/server";
 import type { DataModel } from "./_generated/dataModel";
+import type { DatabaseWriter } from "./_generated/server";
 import {
   assertAllowedEmail,
   assertPasswordBounded,
@@ -77,6 +78,27 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
       // (The old provider account survives but can never authenticate: its
       // email fails the allowlist in `profile`.)
       if (normalizeEmail(existing.email ?? "") !== email) {
+        // Revoke the predecessor's sessions BEFORE re-pointing the row. The
+        // reclaim keeps the user id, so any token issued to the old account
+        // would otherwise become authorized again the moment requireUserId
+        // sees the new allowlisted email — rotation would hand access back
+        // to exactly whoever it was meant to cut off.
+        // The callback's ctx is typed GenericMutationCtx<AnyDataModel>, so
+        // the auth tables' indexes aren't visible; re-view it as this
+        // deployment's schema, which is what actually runs.
+        const db = ctx.db as unknown as DatabaseWriter;
+        const sessions = await db
+          .query("authSessions")
+          .withIndex("userId", (q) => q.eq("userId", existing._id))
+          .collect();
+        for (const session of sessions) {
+          const refreshTokens = await db
+            .query("authRefreshTokens")
+            .withIndex("sessionId", (q) => q.eq("sessionId", session._id))
+            .collect();
+          for (const token of refreshTokens) await db.delete(token._id);
+          await db.delete(session._id);
+        }
         await ctx.db.patch(existing._id, { email });
         return existing._id;
       }
