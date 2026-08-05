@@ -1,4 +1,4 @@
-import { getAuthUserId } from "@convex-dev/auth/server";
+import { getAuthSessionId, getAuthUserId } from "@convex-dev/auth/server";
 import {
   customAction,
   customCtx,
@@ -25,11 +25,13 @@ import { assertAllowedEmail } from "./allowlist";
  * Handlers receive `ctx.userId` so downstream code never re-derives identity.
  *
  * Pre-T3 hardening (review P1): a JWT subject alone is not a principal. Every
- * request re-checks that the user row still exists (a deleted user's session
- * dies immediately, not at access-token expiry) and that the user's email
- * still matches AUTH_ALLOWED_EMAIL — so rotating the allowlist revokes
- * already-issued sessions, which the refresh-token exchange would otherwise
- * keep alive without ever re-running the provider's profile check.
+ * request re-checks that the named session document still exists, that the
+ * user row still exists, and that the user's email still matches
+ * AUTH_ALLOWED_EMAIL. Together those make revocation immediate rather than
+ * advisory: the access JWT is stateless and lives about an hour, and the
+ * refresh-token exchange never re-runs the provider's profile check, so
+ * without these checks a deleted session, a deleted user, or a rotated
+ * allowlist would all keep working until the token expired.
  */
 
 async function requireUserId(
@@ -37,6 +39,14 @@ async function requireUserId(
 ): Promise<Id<"users">> {
   const userId = await getAuthUserId(ctx);
   if (userId === null) {
+    throw new Error("Not signed in");
+  }
+  // The access JWT is stateless and lives about an hour, so deleting a
+  // session row does not by itself stop the token that names it. Check the
+  // session document on every request — otherwise sign-out, session
+  // invalidation, and rotation reclaim are all merely advisory until expiry.
+  const sessionId = await getAuthSessionId(ctx);
+  if (sessionId === null || (await ctx.db.get(sessionId)) === null) {
     throw new Error("Not signed in");
   }
   const user = await ctx.db.get(userId);

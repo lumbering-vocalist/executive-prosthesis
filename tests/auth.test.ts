@@ -50,6 +50,26 @@ function signUpParams(overrides: Record<string, string> = {}) {
   };
 }
 
+/*
+ * A real principal: a users row AND the authSessions row its JWT names.
+ * requireUserId checks the session document on every request, because the
+ * access JWT is stateless — a fabricated session id would (correctly) be
+ * rejected, so tests must mint a real one.
+ */
+async function signedInPrincipal(
+  t: ReturnType<typeof convexTest>,
+  user: { email?: string } = { email: FOUNDER },
+) {
+  return t.run(async (ctx) => {
+    const userId = await ctx.db.insert("users", user);
+    const sessionId = await ctx.db.insert("authSessions", {
+      userId,
+      expirationTime: 4_102_444_800_000, // 2100-01-01, well past any test
+    });
+    return { userId, sessionId };
+  });
+}
+
 test("authed functions reject unauthenticated callers", async () => {
   const t = convexTest(schema, modules);
   await expect(t.query(api.users.viewer, {})).rejects.toThrow(/Not signed in/);
@@ -57,12 +77,10 @@ test("authed functions reject unauthenticated callers", async () => {
 
 test("authed functions see the signed-in user via ctx.userId", async () => {
   const t = convexTest(schema, modules);
-  const userId = await t.run(async (ctx) =>
-    ctx.db.insert("users", { email: FOUNDER }),
-  );
+  const { userId, sessionId } = await signedInPrincipal(t);
   // Convex Auth JWTs carry `userId|sessionId` in the subject claim;
-  // getAuthUserId reads the part before the divider.
-  const asFounder = t.withIdentity({ subject: `${userId}|test-session` });
+  // getAuthUserId reads the part before the divider, getAuthSessionId after.
+  const asFounder = t.withIdentity({ subject: `${userId}|${sessionId}` });
   expect(await asFounder.query(api.users.viewer, {})).toEqual({
     email: FOUNDER,
   });
@@ -72,13 +90,37 @@ test("a session whose user row was deleted is no longer a principal", async () =
   // Review P1: the JWT subject alone must not stay valid until token expiry —
   // requireUserId re-checks the row on every request.
   const t = convexTest(schema, modules);
-  const userId = await t.run(async (ctx) => {
-    const id = await ctx.db.insert("users", { email: FOUNDER });
-    await ctx.db.delete(id);
-    return id;
-  });
-  const ghost = t.withIdentity({ subject: `${userId}|test-session` });
+  const { userId, sessionId } = await signedInPrincipal(t);
+  await t.run(async (ctx) => ctx.db.delete(userId));
+  const ghost = t.withIdentity({ subject: `${userId}|${sessionId}` });
   await expect(ghost.query(api.users.viewer, {})).rejects.toThrow(
+    /Not signed in/,
+  );
+});
+
+test("deleting the session row revokes the access JWT immediately", async () => {
+  // The access JWT is stateless and lives about an hour, so without a
+  // per-request session-document check, sign-out and session invalidation
+  // would only be advisory until expiry — and the rotation reclaim below
+  // would hand the predecessor's live token back to them.
+  const t = convexTest(schema, modules);
+  const { userId, sessionId } = await signedInPrincipal(t);
+  const holder = t.withIdentity({ subject: `${userId}|${sessionId}` });
+  expect(await holder.query(api.users.viewer, {})).toEqual({ email: FOUNDER });
+
+  await t.run(async (ctx) => ctx.db.delete(sessionId));
+  await expect(holder.query(api.users.viewer, {})).rejects.toThrow(
+    /Not signed in/,
+  );
+});
+
+test("a JWT naming a session that never existed is not a principal", async () => {
+  const t = convexTest(schema, modules);
+  const { userId, sessionId } = await signedInPrincipal(t);
+  await t.run(async (ctx) => ctx.db.delete(sessionId));
+  // Same shape as a forged or stale token: well-formed id, no document.
+  const forged = t.withIdentity({ subject: `${userId}|${sessionId}` });
+  await expect(forged.query(api.users.viewer, {})).rejects.toThrow(
     /Not signed in/,
   );
 });
@@ -87,10 +129,8 @@ test("rotating AUTH_ALLOWED_EMAIL revokes already-issued sessions", async () => 
   // Review P1: refresh-token exchange never re-runs the profile allowlist
   // check, so revocation must happen per-request.
   const t = convexTest(schema, modules);
-  const userId = await t.run(async (ctx) =>
-    ctx.db.insert("users", { email: FOUNDER }),
-  );
-  const asFounder = t.withIdentity({ subject: `${userId}|test-session` });
+  const { userId, sessionId } = await signedInPrincipal(t);
+  const asFounder = t.withIdentity({ subject: `${userId}|${sessionId}` });
   expect(await asFounder.query(api.users.viewer, {})).toEqual({
     email: FOUNDER,
   });
@@ -105,8 +145,8 @@ test("fail-closed: a user row with no email is not a principal", async () => {
   // anomalous row (Convex Auth's users.email is optional) can't slip through
   // as an authenticated caller.
   const t = convexTest(schema, modules);
-  const userId = await t.run(async (ctx) => ctx.db.insert("users", {}));
-  const anomalous = t.withIdentity({ subject: `${userId}|test-session` });
+  const { userId, sessionId } = await signedInPrincipal(t, {});
+  const anomalous = t.withIdentity({ subject: `${userId}|${sessionId}` });
   await expect(anomalous.query(api.users.viewer, {})).rejects.toThrow(
     /requires an email/,
   );
@@ -119,10 +159,8 @@ test("fail-closed: unsetting AUTH_ALLOWED_EMAIL revokes live sessions", async ()
   // Rotation is covered above; the unset case is the operational one (env var
   // dropped during a redeploy) and takes the "disabled" branch instead.
   const t = convexTest(schema, modules);
-  const userId = await t.run(async (ctx) =>
-    ctx.db.insert("users", { email: FOUNDER }),
-  );
-  const asFounder = t.withIdentity({ subject: `${userId}|test-session` });
+  const { userId, sessionId } = await signedInPrincipal(t);
+  const asFounder = t.withIdentity({ subject: `${userId}|${sessionId}` });
   delete process.env.AUTH_ALLOWED_EMAIL;
   await expect(asFounder.query(api.users.viewer, {})).rejects.toThrow(
     /disabled/,
@@ -134,10 +172,8 @@ test("checkPrincipal (the authedAction path) runs the same principal checks", as
   await expect(t.query(internal.functions.checkPrincipal, {})).rejects.toThrow(
     /Not signed in/,
   );
-  const userId = await t.run(async (ctx) =>
-    ctx.db.insert("users", { email: FOUNDER }),
-  );
-  const asFounder = t.withIdentity({ subject: `${userId}|test-session` });
+  const { userId, sessionId } = await signedInPrincipal(t);
+  const asFounder = t.withIdentity({ subject: `${userId}|${sessionId}` });
   expect(await asFounder.query(internal.functions.checkPrincipal, {})).toBe(
     userId,
   );

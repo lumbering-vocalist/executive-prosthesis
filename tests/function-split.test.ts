@@ -145,29 +145,31 @@ test("no module smuggles builders via namespace, default, or dynamic imports", (
   }
 });
 
+/*
+ * Re-export checks apply to EVERY module including the sanctioned one.
+ * functions.ts is exempt from *importing* the raw builders — that is its
+ * job — but if it re-exported one, any module could import that builder
+ * from "./functions" and define an unauthenticated public function without
+ * tripping a single direct-import scan.
+ */
 test("no module re-exports the convex/server generic builders", () => {
-  // `export { queryGeneric } from "convex/server"` in a helper would let
-  // another module import the raw builder from that helper, defining an
-  // unauthenticated public query while every other check here stays green.
   for (const [file, source] of Object.entries(sources)) {
-    if (SANCTIONED.includes(file)) continue;
     const reExported = new RegExp(
       String.raw`export\s+(?!type\b)[^;]*from\s*` + CONVEX_SERVER,
     ).test(source);
     expect(
       reExported,
       `${file} re-exports from convex/server — the *Generic public builders ` +
-        `must not be laundered through a helper module`,
+        `must not be laundered through another module`,
     ).toBe(false);
   }
 });
 
-test("no module re-exports from _generated/server", () => {
+test("no module re-exports from _generated/server, sanctioned included", () => {
   // `export { query } from "./_generated/server"` (or `export *`) hands the
   // raw builders to other modules without any import this suite would see.
   // `export type` stays allowed — types can't execute.
   for (const [file, source] of Object.entries(sources)) {
-    if (SANCTIONED.includes(file)) continue;
     expect(
       reExportsGeneratedServer(source),
       `${file} re-exports from ./_generated/server — the raw builders must ` +
