@@ -27,7 +27,10 @@ test("the matcher source is still where this test thinks it is", () => {
 });
 
 function matcherPatterns(): string[] {
-  const block = /matcher:\s*\[([\s\S]*?)\]/.exec(source);
+  // Anchored on the closing "];" rather than the first "]" — the patterns
+  // themselves contain character classes, so a non-greedy "]" stops inside
+  // one and silently yields zero patterns.
+  const block = /matcher:\s*\[([\s\S]*?)\n\s*\],/.exec(source);
   expect(block, "could not find config.matcher in proxy.ts").not.toBeNull();
   const patterns = [...block![1].matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) =>
     // The source is a JS string literal; unescape it the same way the module
@@ -92,4 +95,31 @@ test("exclusions are anchored — no prefix or suffix smuggling", () => {
 test("a new unlisted static asset fails safe (runs auth) rather than leaking", () => {
   expect(runsAuth("/apple-touch-icon.png")).toBe(true);
   expect(runsAuth("/sw.js")).toBe(true);
+});
+
+test("INVARIANT: /api/auth runs the middleware — excluding it breaks all auth", () => {
+  // Convex Auth's signIn, signOut, and every access-token refresh are POSTs
+  // to /api/auth, proxied by convexAuthNextjsMiddleware. If the matcher stops
+  // matching it, the handler never runs, the request 404s, and nobody can
+  // sign in — with every other test here still green. A future "exclude
+  // /api/" instinct (say, when T6's capture endpoint lands) must not take
+  // this route with it.
+  expect(runsAuth("/api/auth")).toBe(true);
+  expect(runsAuth("/api/auth/callback")).toBe(true);
+});
+
+test("static exclusions are concrete files, not whole namespaces", () => {
+  // Excluding `icons/` wholesale would let a future route under it skip auth,
+  // which is the same shape as the dotted-path hole this replaced.
+  for (const path of [
+    "/icons/export",
+    "/icons/nested/secret.png",
+    "/fonts/admin",
+    "/fonts/subdir/other.woff2",
+  ]) {
+    expect(runsAuth(path), path).toBe(true);
+  }
+  // The real assets stay excluded.
+  expect(runsAuth("/icons/icon-512.png")).toBe(false);
+  expect(runsAuth("/fonts/figtree-latin-ext-var.woff2")).toBe(false);
 });

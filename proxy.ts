@@ -35,7 +35,15 @@ export const config = {
   // future route like /export/data.json (review P2). A new static asset that
   // isn't listed here fails safe: it redirects to /signin instead of leaking.
   // The Convex authed* wrappers remain the real enforcement either way.
+  // Concrete files, not whole namespaces: excluding `icons/` wholesale would
+  // let a future `/icons/export` route through unauthenticated — the same
+  // shape as the dotted-path hole this replaced.
+  //
+  // INVARIANT: `/api/auth` MUST keep matching. Convex Auth's sign-in,
+  // sign-out, and token refresh are all POSTs to it, proxied by
+  // convexAuthNextjsMiddleware — excluding it 404s every auth action.
+  // tests/proxy-matcher.test.ts asserts this.
   matcher: [
-    "/((?!_next/|icons/|fonts/|favicon\\.ico$|manifest\\.webmanifest$).*)",
+    "/((?!_next/|icons/[^/]+\\.png$|fonts/[^/]+\\.woff2$|favicon\\.ico$|manifest\\.webmanifest$).*)",
   ],
 };

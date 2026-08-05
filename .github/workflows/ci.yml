@@ -38,10 +38,18 @@ jobs:
           CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
         run: |
           npx convex codegen
-          git diff --exit-code convex/_generated
+          # porcelain, not `diff --exit-code`: codegen emitting a NEW file
+          # leaves it untracked, which `git diff` ignores entirely.
+          test -z "$(git status --porcelain convex/_generated)" || {
+            git status --porcelain convex/_generated
+            echo "::error::convex/_generated drifted from convex/schema.ts — run 'npm run codegen' and commit"
+            exit 1
+          }
       - name: Convex codegen drift check (skipped)
         if: ${{ env.HAS_CONVEX_DEPLOY_KEY != 'true' }}
-        run: echo "::notice::codegen drift check skipped — add the CONVEX_DEPLOY_KEY repo secret to enable it"
+        # warning, not notice: a notice is easy to miss, and until the secret
+        # lands schema drift ships green.
+        run: echo "::warning::codegen drift check skipped — add the CONVEX_DEPLOY_KEY repo secret to enable it"
       - run: npm run build
         env:
           # No Sentry upload in CI; init is a no-op without a DSN.

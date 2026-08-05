@@ -4,7 +4,7 @@ import { useAuthActions } from "@convex-dev/auth/react";
 import * as Sentry from "@sentry/nextjs";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { PASSWORD_MIN_LENGTH } from "@/convex/allowlist";
+import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from "@/lib/auth-policy";
 
 /*
  * The one unauthenticated page (T2). Single user, so no marketing shell —
@@ -17,17 +17,43 @@ import { PASSWORD_MIN_LENGTH } from "@/convex/allowlist";
  * no-shame family).
  */
 
-// The Convex client surfaces network failures as fetch/connection errors;
-// server-side rejections (wrong password, allowlist, setup token) arrive as
-// generic server errors. The two need different copy — "try again" is wrong
-// advice when the server is unreachable — and only infrastructure failures
-// are Sentry-worthy (§13); a mistyped password is not an app error, and
-// capturing every attempt would be noise. Exported for tests.
+// The two failure classes need different copy — "try again" is wrong advice
+// when the server is unreachable — and only infrastructure failures are
+// Sentry-worthy (§13); a mistyped password is not an app error, and
+// capturing every attempt would be noise.
+//
+// Beyond transport errors, this also catches the shapes a broken deployment
+// produces: an HTML error page from the edge (JSON.parse SyntaxError on the
+// auth proxy's response) and the module's own fail-closed configuration
+// errors, which are the likeliest first-run failure and must not read as
+// "you typed it wrong". Exported for tests.
 export function isInfrastructureError(error: unknown): boolean {
+  if (error instanceof TypeError) return true;
+  if (!(error instanceof Error)) return false;
   return (
-    error instanceof TypeError ||
-    (error instanceof Error && /fetch|network|connect/i.test(error.message))
+    error instanceof SyntaxError ||
+    /fetch|network|connect|timed out|not configured|is disabled/i.test(
+      error.message,
+    )
   );
+}
+
+// The Convex client queues action calls while its WebSocket is down instead
+// of rejecting, so on a flaky mobile network — this PWA's whole environment —
+// an un-raced signIn never settles: the button stays disabled and nothing is
+// ever said. Bound the wait so silence becomes a message.
+const SIGN_IN_TIMEOUT_MS = 20_000;
+
+function withTimeout<T>(work: Promise<T>): Promise<T> {
+  return Promise.race([
+    work,
+    new Promise<never>((_, reject) =>
+      setTimeout(
+        () => reject(new Error("Sign-in timed out waiting for the server")),
+        SIGN_IN_TIMEOUT_MS,
+      ),
+    ),
+  ]);
 }
 
 export default function SignInPage() {
@@ -52,7 +78,7 @@ export default function SignInPage() {
     setBusy(true);
     setError(null);
     try {
-      await signIn("password", formData);
+      await withTimeout(signIn("password", formData));
       router.push("/");
     } catch (caught) {
       // Never echo what was typed (§13); keep the tone calm.
@@ -101,6 +127,7 @@ export default function SignInPage() {
           type="password"
           autoComplete={flow === "signIn" ? "current-password" : "new-password"}
           minLength={flow === "signUp" ? PASSWORD_MIN_LENGTH : undefined}
+          maxLength={PASSWORD_MAX_LENGTH}
           required
         />
         {flow === "signUp" && (
@@ -118,6 +145,7 @@ export default function SignInPage() {
               type="password"
               autoComplete="new-password"
               minLength={PASSWORD_MIN_LENGTH}
+              maxLength={PASSWORD_MAX_LENGTH}
               required
             />
             <label className="signin-label" htmlFor="setupToken">

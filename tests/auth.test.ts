@@ -13,7 +13,9 @@ const modules = {
 
 const FOUNDER = "founder@example.com";
 const PASSWORD = "correct-horse-battery-staple";
-const SETUP_TOKEN = "test-setup-token";
+// Must clear both entropy floors in assertSetupToken (length + distinct
+// chars) — a weak token is refused even when it matches exactly.
+const SETUP_TOKEN = "test-setup-token-9f3c1a7e2b8d";
 
 // Convex Auth signs session JWTs on sign-in; give it a throwaway keypair so
 // the real signIn action (auth.ts: Password profile + createOrUpdateUser)
@@ -286,4 +288,53 @@ test("P1 invariant: a second user can never be minted", async () => {
     /already exists/,
   );
   expect(await t.run(async (ctx) => ctx.db.query("users").collect())).toHaveLength(1);
+});
+
+test("rotation is recoverable: sign-up on the new address reclaims the one row", async () => {
+  // Rotating AUTH_ALLOWED_EMAIL revokes live sessions (above) — but if the
+  // stale row could never be re-pointed, revocation would be a one-way door:
+  // every authed call throws, signIn on the old address fails the allowlist,
+  // and signIn on the new one has no account. A sign-up carrying a valid
+  // setup token must reclaim the single row rather than hit the invariant.
+  const t = convexTest(schema, modules);
+  await t.action(api.auth.signIn, signUpParams());
+  const SUCCESSOR = "successor@example.com";
+  process.env.AUTH_ALLOWED_EMAIL = SUCCESSOR;
+
+  const reclaimed = await t.action(
+    api.auth.signIn,
+    signUpParams({ email: SUCCESSOR, password: "a-new-long-password" }),
+  );
+  expect(reclaimed.tokens).not.toBeNull();
+
+  const users = await t.run(async (ctx) => ctx.db.query("users").collect());
+  expect(users).toHaveLength(1);
+  expect(users[0].email).toBe(SUCCESSOR);
+
+  // The successor can sign in; the old address cannot (it fails the
+  // allowlist in `profile`, so its surviving provider account is inert).
+  const back = await t.action(api.auth.signIn, {
+    provider: "password",
+    params: { email: SUCCESSOR, password: "a-new-long-password", flow: "signIn" },
+  });
+  expect(back.tokens).not.toBeNull();
+  await expect(
+    t.action(api.auth.signIn, {
+      provider: "password",
+      params: { email: FOUNDER, password: PASSWORD, flow: "signIn" },
+    }),
+  ).rejects.toThrow(/not allowed/);
+});
+
+test("a password past the cap is rejected on signIn too, before any hashing", async () => {
+  // validatePasswordRequirements runs on signUp/reset only, so the bound has
+  // to be asserted in `profile` or signIn hands scrypt an unbounded string.
+  const t = convexTest(schema, modules);
+  await t.action(api.auth.signIn, signUpParams());
+  await expect(
+    t.action(api.auth.signIn, {
+      provider: "password",
+      params: { email: FOUNDER, password: "x".repeat(100_000), flow: "signIn" },
+    }),
+  ).rejects.toThrow(/capped/);
 });

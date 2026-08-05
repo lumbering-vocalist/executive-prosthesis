@@ -105,9 +105,16 @@ export function redactExceptionValue(value: string): string {
     .replace(/['"`][\s\S]*['"`]/, REDACTED)
     .replace(/['"`][\s\S]*$/, REDACTED)
     .replace(/\{[\s\S]*$/, REDACTED)
-    .replace(/(value:\s*)[\s\S]+/i, `$1${REDACTED}`);
+    .replace(/(value:\s*)[\s\S]+/i, `$1${REDACTED}`)
+    // Unquoted channels the pattern rules above can't see. URLs carry
+    // content in their query strings ("Failed to parse URL from
+    // /api/x?text=…"); email addresses are the account identifier and
+    // Convex Auth interpolates one bare into "Account <id> already exists".
+    .replace(/\b[\w.+-]+@[\w-]+\.[\w.-]+/g, REDACTED)
+    .replace(/\b(?:https?:\/\/|\/)\S*[?#]\S*/g, (url) => stripQuery(url));
   if (out.length > EXCEPTION_VALUE_MAX) {
-    out = out.slice(0, EXCEPTION_VALUE_MAX) + "…";
+    // Cut on a code-point boundary so truncation can't emit a lone surrogate.
+    out = Array.from(out).slice(0, EXCEPTION_VALUE_MAX).join("") + "…";
   }
   return out;
 }
@@ -128,6 +135,16 @@ function scrubValue(value: unknown, depth = 0, key = ""): unknown {
   return out;
 }
 
+// Frame-local variables (includeLocalVariables / ANR captures) are whole
+// program state — the one frame field that can carry capture text. Dropped
+// wholesale rather than scrubbed: fail closed.
+function dropFrameLocals(
+  stacktrace?: { frames?: { vars?: unknown }[] } | null,
+): void {
+  if (!stacktrace?.frames) return;
+  for (const frame of stacktrace.frames) delete frame.vars;
+}
+
 /**
  * `beforeSend` / `beforeSendTransaction` hook. Typed structurally (not against
  * Sentry's Event type) so it is unit-testable without the SDK and reusable
@@ -143,6 +160,11 @@ export function scrubEvent<
         value?: string;
         // Structurally loose so Sentry's StackFrame assigns; only `vars`
         // (frame-local variables) is touched.
+        stacktrace?: { frames?: { vars?: unknown; filename?: string }[] } | null;
+      }[];
+    } | null;
+    threads?: {
+      values?: {
         stacktrace?: { frames?: { vars?: unknown; filename?: string }[] } | null;
       }[];
     } | null;
@@ -171,15 +193,12 @@ export function scrubEvent<
   if (event.exception?.values) {
     for (const ex of event.exception.values) {
       if (ex.value) ex.value = redactExceptionValue(ex.value);
-      // Frame-local variables (includeLocalVariables / ANR captures) are
-      // whole program state — the one frame field that can carry capture
-      // text. Dropped wholesale rather than scrubbed: fail closed.
-      if (ex.stacktrace?.frames) {
-        for (const frame of ex.stacktrace.frames) {
-          delete frame.vars;
-        }
-      }
+      dropFrameLocals(ex.stacktrace);
     }
+  }
+  // Threads carry the same stacktrace shape (ANR / worker reports).
+  if (event.threads?.values) {
+    for (const thread of event.threads.values) dropFrameLocals(thread.stacktrace);
   }
   if (event.request) {
     // Bodies, cookies, headers, and query strings never ship.

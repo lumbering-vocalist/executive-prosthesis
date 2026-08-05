@@ -19,8 +19,11 @@ import { expect, test } from "vitest";
  * the edge runtime.
  */
 
+// .js too: tsconfig sets allowJs and Convex accepts JavaScript function
+// modules, so a .js module could otherwise expose a raw public builder while
+// this suite stayed green.
 const sources = import.meta.glob(
-  ["../convex/**/*.ts", "!../convex/_generated/**"],
+  ["../convex/**/*.ts", "../convex/**/*.js", "!../convex/_generated/**"],
   {
     query: "?raw",
     import: "default",

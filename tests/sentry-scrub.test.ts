@@ -202,6 +202,46 @@ test("oversized exception values are redacted wholesale before pattern work", ()
   expect(out).toBe("[scrubbed]");
 });
 
+test("unquoted URLs lose their query strings in exception values", () => {
+  const out = redactExceptionValue(
+    "TypeError: Failed to parse URL from /api/capture?text=pick%20up%20the%20meds",
+  );
+  expect(out).not.toContain("pick%20up");
+  expect(out).toContain("/api/capture");
+});
+
+test("bare email addresses are redacted (Convex Auth interpolates one)", () => {
+  // createAccountFromCredentials throws `Account ${id} already exists` with
+  // the account id — the founder's email — unquoted.
+  const out = redactExceptionValue(
+    "Account founder@example.com already exists",
+  );
+  expect(out).not.toContain("founder@example.com");
+  expect(out).toContain("already exists");
+});
+
+test("truncation cuts on a code-point boundary, never a lone surrogate", () => {
+  const out = redactExceptionValue("🙂".repeat(400));
+  // A naive slice(0, 300) would split the 300th unit mid-pair.
+  expect(out).not.toMatch(/[\uD800-\uDBFF]$/);
+  expect(Array.from(out).length).toBeLessThanOrEqual(301);
+});
+
+test("thread stacktrace frame locals never ship either", () => {
+  const event = scrubEvent({
+    threads: {
+      values: [
+        {
+          stacktrace: {
+            frames: [{ filename: "worker.ts", vars: { note: "pick up the meds" } }],
+          },
+        },
+      ],
+    },
+  });
+  expect(JSON.stringify(event)).not.toContain("pick up the meds");
+});
+
 test("stacktrace frame locals never ship", () => {
   // includeLocalVariables/ANR captures attach whole program state as
   // frame.vars — the one frame field that can carry capture text.

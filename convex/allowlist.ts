@@ -11,6 +11,20 @@
  * events).
  */
 
+import {
+  PASSWORD_MAX_LENGTH,
+  PASSWORD_MIN_LENGTH,
+  SETUP_TOKEN_MIN_DISTINCT_CHARS,
+  SETUP_TOKEN_MIN_LENGTH,
+} from "../lib/auth-policy";
+
+export {
+  PASSWORD_MAX_LENGTH,
+  PASSWORD_MIN_LENGTH,
+  SETUP_TOKEN_MIN_DISTINCT_CHARS,
+  SETUP_TOKEN_MIN_LENGTH,
+};
+
 export function normalizeEmail(raw: string): string {
   return raw.trim().toLowerCase();
 }
@@ -38,63 +52,66 @@ export function assertAllowedEmail(
   return normalizeEmail(candidate);
 }
 
-// Compares every byte regardless of where the first mismatch is, so response
-// timing doesn't leak how much of a guessed token was right.
-function constantTimeEqual(a: string, b: string): boolean {
+/*
+ * Compares against `expected` byte for byte regardless of where the first
+ * mismatch is, so response timing doesn't leak how much of a guessed token
+ * was right. The loop length is `expected`'s, never the candidate's, so an
+ * attacker can't drive iteration count (or read `max(len)` off the clock)
+ * with a huge guess.
+ */
+function constantTimeEqual(candidate: string, expected: string): boolean {
   const encoder = new TextEncoder();
-  const aBytes = encoder.encode(a);
-  const bBytes = encoder.encode(b);
-  let diff = aBytes.length ^ bBytes.length;
-  const length = Math.max(aBytes.length, bBytes.length);
-  for (let i = 0; i < length; i++) {
-    diff |= (aBytes[i] ?? 0) ^ (bBytes[i] ?? 0);
+  const candidateBytes = encoder.encode(candidate);
+  const expectedBytes = encoder.encode(expected);
+  let diff = candidateBytes.length ^ expectedBytes.length;
+  for (let i = 0; i < expectedBytes.length; i++) {
+    diff |= (candidateBytes[i] ?? 0) ^ expectedBytes[i];
   }
   return diff === 0;
 }
-
-// Sign-up has no rate limiter (Convex Auth throttles signIn only), so the
-// token itself must resist online guessing while the bootstrap window is
-// open. A founder-chosen "setup123" would resurrect the P0 this gate exists
-// to close — refuse weak configuration outright.
-export const SETUP_TOKEN_MIN_LENGTH = 16;
 
 /**
  * Account creation is a one-time, founder-only act: knowledge of the
  * allowlisted email is public information, not authorization (the T2 review's
  * P0 — anyone who learned the email could have claimed the account first).
- * The founder sets AUTH_SETUP_TOKEN (generated, e.g. `openssl rand -hex 24`),
+ * The founder sets AUTH_SETUP_TOKEN (generated: `openssl rand -hex 24`),
  * signs up once, and unsets it; while it is unset, sign-up is disabled
- * entirely. Throws on any mismatch and never echoes the attempted token.
+ * entirely.
+ *
+ * Sign-up is not rate-limited by Convex Auth, so a guessable token would
+ * resurrect that P0 — a configured token must clear both a length floor and
+ * a character-variety floor, which a generated value passes and a
+ * human-invented one ("passwordpasswordpass") does not. Throws on any
+ * mismatch and never echoes the attempted token.
  */
 export function assertSetupToken(
   candidate: unknown,
   expected: string | undefined,
 ): void {
-  if (expected === undefined || expected.trim() === "") {
+  const wanted = expected?.trim() ?? "";
+  if (wanted === "") {
     throw new Error(
       "Account creation is disabled: AUTH_SETUP_TOKEN is not configured",
     );
   }
-  if (expected.trim().length < SETUP_TOKEN_MIN_LENGTH) {
+  if (
+    wanted.length < SETUP_TOKEN_MIN_LENGTH ||
+    new Set(wanted).size < SETUP_TOKEN_MIN_DISTINCT_CHARS
+  ) {
     throw new Error(
-      "Account creation is disabled: AUTH_SETUP_TOKEN is too short — " +
-        `use at least ${SETUP_TOKEN_MIN_LENGTH} characters (openssl rand -hex 24)`,
+      "Account creation is disabled: AUTH_SETUP_TOKEN is too weak — " +
+        `it needs at least ${SETUP_TOKEN_MIN_LENGTH} characters and ` +
+        `${SETUP_TOKEN_MIN_DISTINCT_CHARS} distinct ones ` +
+        "(generate it: openssl rand -hex 24)",
     );
   }
   if (typeof candidate !== "string" || candidate.trim() === "") {
     throw new Error("Account creation requires the setup token");
   }
-  if (!constantTimeEqual(candidate.trim(), expected.trim())) {
+  if (!constantTimeEqual(candidate.trim(), wanted)) {
     throw new Error("That setup token is not valid");
   }
 }
-
-// Review P1: the provider's default is 8 chars; this account guards
-// everything the prosthesis will ever hold. Length only, per NIST — no
-// composition rules. The upper bound caps what a hostile client can make
-// scrypt chew on.
-export const PASSWORD_MIN_LENGTH = 12;
-export const PASSWORD_MAX_LENGTH = 256;
 
 /** `validatePasswordRequirements` for the Password provider (signUp/reset). */
 export function assertPasswordStrength(password: string): void {
@@ -103,7 +120,18 @@ export function assertPasswordStrength(password: string): void {
       `Passwords need at least ${PASSWORD_MIN_LENGTH} characters`,
     );
   }
-  if (password.length > PASSWORD_MAX_LENGTH) {
+  assertPasswordBounded(password);
+}
+
+/**
+ * The upper bound alone, for the flows the provider never validates:
+ * `validatePasswordRequirements` runs on signUp and reset-verification only,
+ * so a `flow:"signIn"` request can otherwise hand scrypt a megabyte.
+ * `undefined` passes — the provider raises its own "missing password" error.
+ */
+export function assertPasswordBounded(password: unknown): void {
+  if (password === undefined) return;
+  if (typeof password !== "string" || password.length > PASSWORD_MAX_LENGTH) {
     throw new Error(
       `Passwords are capped at ${PASSWORD_MAX_LENGTH} characters`,
     );

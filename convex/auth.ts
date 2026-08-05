@@ -3,8 +3,10 @@ import { convexAuth } from "@convex-dev/auth/server";
 import type { DataModel } from "./_generated/dataModel";
 import {
   assertAllowedEmail,
+  assertPasswordBounded,
   assertPasswordStrength,
   assertSetupToken,
+  normalizeEmail,
 } from "./allowlist";
 
 /*
@@ -38,6 +40,10 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
         if (params.flow === "signUp") {
           assertSetupToken(params.setupToken, process.env.AUTH_SETUP_TOKEN);
         }
+        // The provider validates password length on signUp and reset only,
+        // so signIn would otherwise hand scrypt an unbounded string. Bound
+        // it on every flow; `profile` runs before any hashing.
+        assertPasswordBounded(params.password);
         return {
           email: assertAllowedEmail(
             params.email,
@@ -57,16 +63,29 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
       if (existingUserId !== null) {
         return existingUserId;
       }
+      const existing = await ctx.db.query("users").first();
+      if (existing === null) {
+        return ctx.db.insert("users", { email });
+      }
+      // Rotation reclaim: the per-request allowlist check in functions.ts
+      // revokes sessions the moment AUTH_ALLOWED_EMAIL changes, which would
+      // otherwise be a one-way door — the stale row fails every authed call,
+      // signIn on the old address fails the allowlist, and a fresh signUp on
+      // the new one would hit the single-user invariant below. So when the
+      // stored row is no longer allowlisted, a sign-up carrying a valid setup
+      // token re-points that one row at the new address instead of throwing.
+      // (The old provider account survives but can never authenticate: its
+      // email fails the allowlist in `profile`.)
+      if (normalizeEmail(existing.email ?? "") !== email) {
+        await ctx.db.patch(existing._id, { email });
+        return existing._id;
+      }
       // "Exactly one user" as a DB invariant, not a hope: a second insert —
       // whatever provider or race produced it — fails here rather than
       // creating a split-brain account (review P1).
-      const existing = await ctx.db.query("users").first();
-      if (existing !== null) {
-        throw new Error(
-          "This is a single-user system; the account already exists",
-        );
-      }
-      return ctx.db.insert("users", { email });
+      throw new Error(
+        "This is a single-user system; the account already exists",
+      );
     },
   },
 });

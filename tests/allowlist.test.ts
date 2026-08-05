@@ -6,6 +6,7 @@ import {
   normalizeEmail,
   PASSWORD_MAX_LENGTH,
   PASSWORD_MIN_LENGTH,
+  SETUP_TOKEN_MIN_DISTINCT_CHARS,
   SETUP_TOKEN_MIN_LENGTH,
 } from "../convex/allowlist";
 
@@ -53,9 +54,10 @@ test("normalizeEmail trims and lowercases only", () => {
   expect(normalizeEmail(" A@B.C ")).toBe("a@b.c");
 });
 
-// Configured tokens must clear SETUP_TOKEN_MIN_LENGTH (16); keep the test
-// token realistic so the entropy floor doesn't interfere with these cases.
-const TOKEN = "tok-1234-5678-9abc";
+// Configured tokens must clear both entropy floors (length + distinct
+// characters); use a generated-looking value so those floors don't interfere
+// with the cases below.
+const TOKEN = "9f3c1a7e2b8d40x6y5z1q4w7";
 
 test("setup token: exact match passes, surrounding whitespace tolerated", () => {
   expect(() => assertSetupToken(TOKEN, TOKEN)).not.toThrow();
@@ -71,14 +73,22 @@ test("setup token fail-closed: unset or blank token disables sign-up", () => {
 test("setup token fail-closed: a weak configured token disables sign-up", () => {
   // Sign-up has no rate limiter, so a guessable founder-chosen token would
   // resurrect the P0 takeover — refuse the configuration outright, even when
-  // the candidate matches it exactly.
-  expect(() => assertSetupToken("setup123", "setup123")).toThrow(/too short/);
+  // the candidate matches it exactly. Both floors must bite: length alone
+  // would accept "aaaa…", variety alone would accept "abc".
+  expect(() => assertSetupToken("setup123", "setup123")).toThrow(/too weak/);
   expect(() =>
-    assertSetupToken("a".repeat(SETUP_TOKEN_MIN_LENGTH - 1), "a".repeat(SETUP_TOKEN_MIN_LENGTH - 1)),
-  ).toThrow(/too short/);
-  expect(() =>
-    assertSetupToken("a".repeat(SETUP_TOKEN_MIN_LENGTH), "a".repeat(SETUP_TOKEN_MIN_LENGTH)),
-  ).not.toThrow();
+    assertSetupToken(TOKEN.slice(0, -1), TOKEN.slice(0, -1)),
+  ).toThrow(/too weak/);
+  const longButRepetitive = "ab".repeat(SETUP_TOKEN_MIN_LENGTH);
+  expect(() => assertSetupToken(longButRepetitive, longButRepetitive)).toThrow(
+    /too weak/,
+  );
+  // A generated token clears both floors.
+  expect(() => assertSetupToken(TOKEN, TOKEN)).not.toThrow();
+  expect(TOKEN.length).toBeGreaterThanOrEqual(SETUP_TOKEN_MIN_LENGTH);
+  expect(new Set(TOKEN).size).toBeGreaterThanOrEqual(
+    SETUP_TOKEN_MIN_DISTINCT_CHARS,
+  );
 });
 
 test("setup token: missing, non-string, or wrong candidate is rejected", () => {
@@ -106,7 +116,7 @@ test("setup token: constant-time compare is still a correct compare", () => {
   expect(() => assertSetupToken(`x${TOKEN.slice(1)}`, TOKEN)).toThrow(/not valid/);
   expect(() => assertSetupToken(`${TOKEN.slice(0, -1)}x`, TOKEN)).toThrow(/not valid/);
   // Multi-byte tokens compare by encoded bytes, not by UTF-16 code units.
-  const MB_TOKEN = "tökén-✓-tökén-✓✓";
+  const MB_TOKEN = "tökén-✓-mültï-bÿte-tökén✓";
   expect(() => assertSetupToken(MB_TOKEN, MB_TOKEN)).not.toThrow();
   expect(() =>
     assertSetupToken(`${MB_TOKEN.slice(0, -1)}x`, MB_TOKEN),
