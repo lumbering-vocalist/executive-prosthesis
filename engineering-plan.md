@@ -269,7 +269,7 @@ On engagement (app open or message reply): propose **one** next action, phrased 
 
 **M1 — "it holds"** (informal daily use begins)
 - **T1** Scaffold: Next.js PWA + Convex + Vitest/convex-test + CI + Sentry-with-scrubbing + **design tokens (§5.6):** color/type/spacing/radius/motion CSS variables, dark mode, Figtree self-hosted, safe-area/viewport PWA chrome (§5.7).
-- **T2** Auth: Convex Auth single-user allowlist; every function asserts; public/internal split.
+- **T2** Auth: Convex Auth single-user allowlist; every function asserts; public/internal split. Hardened pre-T3 (v0.2.1.0): account creation gated on a one-time `AUTH_SETUP_TOKEN`, password bounds on every flow, and per-request principal validation (session document + user row + allowlist) so revocation is immediate rather than advisory until token expiry.
 - **T3** Schema + lifecycle: all §3 tables + indexes; transition module implements §6's map exactly; no-shame CI test; transition-map tests.
 - **T4** Custody pipeline: airlock buffer → captures; voice record-upload-transcribe (mimetype detection); degraded ladder; closure loop (stuck-job scanner, dead-letter UI, backup/restore); custody tests incl. eviction; privacy gates. **Proto-stream home (D9):** the §5.5 composition ships here — the real stream frame rendering capture cards (§4.5 states), system-health messages, and §9.5 first-run messages; the app never changes shape after this. If the app backgrounds with memory-held audio, next open states exactly what was and wasn't kept (truth-telling extended to the last custody hole).
 - **T5** Daily email digest (Resend): today's captures + pending confirmations; the resurfacing floor. (Absorbs the old decay-tripwire TODO.)
