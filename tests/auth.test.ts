@@ -98,6 +98,23 @@ test("a session whose user row was deleted is no longer a principal", async () =
   );
 });
 
+test("the real sign-up round trip still reaches an authed query", async () => {
+  // The per-request session-document check must revoke stale tokens WITHOUT
+  // breaking the legitimate path: a genuine sign-in creates the session its
+  // JWT names, so this walks the whole flow through the real provider rather
+  // than a hand-built principal.
+  const t = convexTest(schema, modules);
+  await t.action(api.auth.signIn, signUpParams());
+  const { userId, sessionId } = await t.run(async (ctx) => {
+    const session = await ctx.db.query("authSessions").first();
+    return { userId: session!.userId, sessionId: session!._id };
+  });
+  const asFounder = t.withIdentity({ subject: `${userId}|${sessionId}` });
+  expect(await asFounder.query(api.users.viewer, {})).toEqual({
+    email: FOUNDER,
+  });
+});
+
 test("deleting the session row revokes the access JWT immediately", async () => {
   // The access JWT is stateless and lives about an hour, so without a
   // per-request session-document check, sign-out and session invalidation
