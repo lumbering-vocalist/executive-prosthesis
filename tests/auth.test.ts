@@ -1,7 +1,7 @@
 import { beforeAll, beforeEach, expect, test } from "vitest";
 import { convexTest } from "convex-test";
 import { exportJWK, exportPKCS8, generateKeyPair } from "jose";
-import { api } from "../convex/_generated/api";
+import { api, internal } from "../convex/_generated/api";
 import schema from "../convex/schema";
 
 // Same glob rationale as convex-harness.test.ts: globs must live in this
@@ -13,6 +13,9 @@ const modules = {
 
 const FOUNDER = "founder@example.com";
 const PASSWORD = "correct-horse-battery-staple";
+// Must clear both entropy floors in assertSetupToken (length + distinct
+// chars) — a weak token is refused even when it matches exactly.
+const SETUP_TOKEN = "test-setup-token-9f3c1a7e2b8d";
 
 // Convex Auth signs session JWTs on sign-in; give it a throwaway keypair so
 // the real signIn action (auth.ts: Password profile + createOrUpdateUser)
@@ -31,7 +34,41 @@ beforeAll(async () => {
 
 beforeEach(() => {
   process.env.AUTH_ALLOWED_EMAIL = FOUNDER;
+  process.env.AUTH_SETUP_TOKEN = SETUP_TOKEN;
 });
+
+function signUpParams(overrides: Record<string, string> = {}) {
+  return {
+    provider: "password",
+    params: {
+      email: FOUNDER,
+      password: PASSWORD,
+      flow: "signUp",
+      setupToken: SETUP_TOKEN,
+      ...overrides,
+    },
+  };
+}
+
+/*
+ * A real principal: a users row AND the authSessions row its JWT names.
+ * requireUserId checks the session document on every request, because the
+ * access JWT is stateless — a fabricated session id would (correctly) be
+ * rejected, so tests must mint a real one.
+ */
+async function signedInPrincipal(
+  t: ReturnType<typeof convexTest>,
+  user: { email?: string } = { email: FOUNDER },
+) {
+  return t.run(async (ctx) => {
+    const userId = await ctx.db.insert("users", user);
+    const sessionId = await ctx.db.insert("authSessions", {
+      userId,
+      expirationTime: 4_102_444_800_000, // 2100-01-01, well past any test
+    });
+    return { userId, sessionId };
+  });
+}
 
 test("authed functions reject unauthenticated callers", async () => {
   const t = convexTest(schema, modules);
@@ -40,42 +77,138 @@ test("authed functions reject unauthenticated callers", async () => {
 
 test("authed functions see the signed-in user via ctx.userId", async () => {
   const t = convexTest(schema, modules);
-  const userId = await t.run(async (ctx) =>
-    ctx.db.insert("users", { email: "founder@example.com" }),
-  );
+  const { userId, sessionId } = await signedInPrincipal(t);
   // Convex Auth JWTs carry `userId|sessionId` in the subject claim;
-  // getAuthUserId reads the part before the divider.
-  const asFounder = t.withIdentity({ subject: `${userId}|test-session` });
+  // getAuthUserId reads the part before the divider, getAuthSessionId after.
+  const asFounder = t.withIdentity({ subject: `${userId}|${sessionId}` });
   expect(await asFounder.query(api.users.viewer, {})).toEqual({
-    email: "founder@example.com",
+    email: FOUNDER,
   });
 });
 
-test("viewer degrades to a null email when the user row is gone", async () => {
-  // A valid session whose user was deleted (ctx.db.get returns null) must not
-  // crash the home screen's "signed in as" line.
+test("a session whose user row was deleted is no longer a principal", async () => {
+  // Review P1: the JWT subject alone must not stay valid until token expiry —
+  // requireUserId re-checks the row on every request.
   const t = convexTest(schema, modules);
-  const userId = await t.run(async (ctx) => {
-    const id = await ctx.db.insert("users", { email: FOUNDER });
-    await ctx.db.delete(id);
-    return id;
-  });
-  const ghost = t.withIdentity({ subject: `${userId}|test-session` });
-  expect(await ghost.query(api.users.viewer, {})).toEqual({ email: null });
+  const { userId, sessionId } = await signedInPrincipal(t);
+  await t.run(async (ctx) => ctx.db.delete(userId));
+  const ghost = t.withIdentity({ subject: `${userId}|${sessionId}` });
+  await expect(ghost.query(api.users.viewer, {})).rejects.toThrow(
+    /Not signed in/,
+  );
 });
 
-test("sign-up with the allowlisted email creates exactly one normalized user", async () => {
+test("the real sign-up round trip still reaches an authed query", async () => {
+  // The per-request session-document check must revoke stale tokens WITHOUT
+  // breaking the legitimate path: a genuine sign-in creates the session its
+  // JWT names, so this walks the whole flow through the real provider rather
+  // than a hand-built principal.
   const t = convexTest(schema, modules);
-  const result = await t.action(api.auth.signIn, {
-    provider: "password",
-    params: { email: " Founder@Example.COM ", password: PASSWORD, flow: "signUp" },
+  await t.action(api.auth.signIn, signUpParams());
+  const { userId, sessionId } = await t.run(async (ctx) => {
+    const session = await ctx.db.query("authSessions").first();
+    return { userId: session!.userId, sessionId: session!._id };
   });
+  const asFounder = t.withIdentity({ subject: `${userId}|${sessionId}` });
+  expect(await asFounder.query(api.users.viewer, {})).toEqual({
+    email: FOUNDER,
+  });
+});
+
+test("deleting the session row revokes the access JWT immediately", async () => {
+  // The access JWT is stateless and lives about an hour, so without a
+  // per-request session-document check, sign-out and session invalidation
+  // would only be advisory until expiry — and the rotation reclaim below
+  // would hand the predecessor's live token back to them.
+  const t = convexTest(schema, modules);
+  const { userId, sessionId } = await signedInPrincipal(t);
+  const holder = t.withIdentity({ subject: `${userId}|${sessionId}` });
+  expect(await holder.query(api.users.viewer, {})).toEqual({ email: FOUNDER });
+
+  await t.run(async (ctx) => ctx.db.delete(sessionId));
+  await expect(holder.query(api.users.viewer, {})).rejects.toThrow(
+    /Not signed in/,
+  );
+});
+
+test("a JWT naming a session that never existed is not a principal", async () => {
+  const t = convexTest(schema, modules);
+  const { userId, sessionId } = await signedInPrincipal(t);
+  await t.run(async (ctx) => ctx.db.delete(sessionId));
+  // Same shape as a forged or stale token: well-formed id, no document.
+  const forged = t.withIdentity({ subject: `${userId}|${sessionId}` });
+  await expect(forged.query(api.users.viewer, {})).rejects.toThrow(
+    /Not signed in/,
+  );
+});
+
+test("rotating AUTH_ALLOWED_EMAIL revokes already-issued sessions", async () => {
+  // Review P1: refresh-token exchange never re-runs the profile allowlist
+  // check, so revocation must happen per-request.
+  const t = convexTest(schema, modules);
+  const { userId, sessionId } = await signedInPrincipal(t);
+  const asFounder = t.withIdentity({ subject: `${userId}|${sessionId}` });
+  expect(await asFounder.query(api.users.viewer, {})).toEqual({
+    email: FOUNDER,
+  });
+  process.env.AUTH_ALLOWED_EMAIL = "successor@example.com";
+  await expect(asFounder.query(api.users.viewer, {})).rejects.toThrow(
+    /not allowed/,
+  );
+});
+
+test("fail-closed: a user row with no email is not a principal", async () => {
+  // requireUserId leans on assertAllowedEmail to reject non-strings, so an
+  // anomalous row (Convex Auth's users.email is optional) can't slip through
+  // as an authenticated caller.
+  const t = convexTest(schema, modules);
+  const { userId, sessionId } = await signedInPrincipal(t, {});
+  const anomalous = t.withIdentity({ subject: `${userId}|${sessionId}` });
+  await expect(anomalous.query(api.users.viewer, {})).rejects.toThrow(
+    /requires an email/,
+  );
+  await expect(
+    anomalous.query(internal.functions.checkPrincipal, {}),
+  ).rejects.toThrow(/requires an email/);
+});
+
+test("fail-closed: unsetting AUTH_ALLOWED_EMAIL revokes live sessions", async () => {
+  // Rotation is covered above; the unset case is the operational one (env var
+  // dropped during a redeploy) and takes the "disabled" branch instead.
+  const t = convexTest(schema, modules);
+  const { userId, sessionId } = await signedInPrincipal(t);
+  const asFounder = t.withIdentity({ subject: `${userId}|${sessionId}` });
+  delete process.env.AUTH_ALLOWED_EMAIL;
+  await expect(asFounder.query(api.users.viewer, {})).rejects.toThrow(
+    /disabled/,
+  );
+});
+
+test("checkPrincipal (the authedAction path) runs the same principal checks", async () => {
+  const t = convexTest(schema, modules);
+  await expect(t.query(internal.functions.checkPrincipal, {})).rejects.toThrow(
+    /Not signed in/,
+  );
+  const { userId, sessionId } = await signedInPrincipal(t);
+  const asFounder = t.withIdentity({ subject: `${userId}|${sessionId}` });
+  expect(await asFounder.query(internal.functions.checkPrincipal, {})).toBe(
+    userId,
+  );
+});
+
+test("sign-up with token + allowlisted email creates exactly one normalized user", async () => {
+  const t = convexTest(schema, modules);
+  const result = await t.action(
+    api.auth.signIn,
+    signUpParams({ email: " Founder@Example.COM " }),
+  );
   expect(result.tokens).not.toBeNull();
   const users = await t.run(async (ctx) => ctx.db.query("users").collect());
   expect(users).toHaveLength(1);
   expect(users[0].email).toBe(FOUNDER);
 
-  // Signing in again reuses the account instead of minting a second user.
+  // Signing in again reuses the account instead of minting a second user —
+  // and needs no setup token.
   const again = await t.action(api.auth.signIn, {
     provider: "password",
     params: { email: FOUNDER, password: PASSWORD, flow: "signIn" },
@@ -95,10 +228,7 @@ test("sign-up with the allowlisted email creates exactly one normalized user", a
 test("sign-up with a non-allowlisted email is rejected and mints nothing", async () => {
   const t = convexTest(schema, modules);
   await expect(
-    t.action(api.auth.signIn, {
-      provider: "password",
-      params: { email: "intruder@example.com", password: PASSWORD, flow: "signUp" },
-    }),
+    t.action(api.auth.signIn, signUpParams({ email: "intruder@example.com" })),
   ).rejects.toThrow();
   const users = await t.run(async (ctx) => ctx.db.query("users").collect());
   expect(users).toEqual([]);
@@ -107,11 +237,171 @@ test("sign-up with a non-allowlisted email is rejected and mints nothing", async
 test("fail-closed: sign-up is rejected while AUTH_ALLOWED_EMAIL is unset", async () => {
   delete process.env.AUTH_ALLOWED_EMAIL;
   const t = convexTest(schema, modules);
+  await expect(t.action(api.auth.signIn, signUpParams())).rejects.toThrow();
+  expect(await t.run(async (ctx) => ctx.db.query("users").collect())).toEqual([]);
+});
+
+test("P0 gate: sign-up without the setup token is rejected and mints nothing", async () => {
+  const t = convexTest(schema, modules);
+  const params: Record<string, string> = { ...signUpParams().params };
+  delete params.setupToken;
+  await expect(
+    t.action(api.auth.signIn, { provider: "password", params }),
+  ).rejects.toThrow(/setup token/);
+  expect(await t.run(async (ctx) => ctx.db.query("users").collect())).toEqual([]);
+});
+
+test("P0 gate: a wrong setup token is rejected and mints nothing", async () => {
+  const t = convexTest(schema, modules);
+  await expect(
+    t.action(api.auth.signIn, signUpParams({ setupToken: "guessed-token" })),
+  ).rejects.toThrow(/not valid/);
+  expect(await t.run(async (ctx) => ctx.db.query("users").collect())).toEqual([]);
+});
+
+test("P0 gate fail-closed: unset AUTH_SETUP_TOKEN disables sign-up entirely", async () => {
+  // The steady state after the founder claims the account: token unset,
+  // sign-up impossible even with the correct email, password, and any token.
+  delete process.env.AUTH_SETUP_TOKEN;
+  const t = convexTest(schema, modules);
+  await expect(t.action(api.auth.signIn, signUpParams())).rejects.toThrow(
+    /disabled/,
+  );
+  expect(await t.run(async (ctx) => ctx.db.query("users").collect())).toEqual([]);
+});
+
+test("P1 policy: passwords under 12 characters are rejected on sign-up", async () => {
+  const t = convexTest(schema, modules);
+  await expect(
+    t.action(api.auth.signIn, signUpParams({ password: "short-pw" })),
+  ).rejects.toThrow();
+  expect(await t.run(async (ctx) => ctx.db.query("users").collect())).toEqual([]);
+});
+
+test("P1 policy: the password bounds hold through the real provider", async () => {
+  // The unit test covers assertPasswordStrength directly; this proves it is
+  // actually wired as validatePasswordRequirements on the signUp flow —
+  // both ends of the range, against the live Password provider.
+  const t = convexTest(schema, modules);
+  await expect(
+    t.action(api.auth.signIn, signUpParams({ password: "a".repeat(257) })),
+  ).rejects.toThrow();
+  expect(await t.run(async (ctx) => ctx.db.query("users").collect())).toEqual([]);
+
+  const ok = await t.action(
+    api.auth.signIn,
+    signUpParams({ password: "a".repeat(12) }),
+  );
+  expect(ok.tokens).not.toBeNull();
+  expect(
+    await t.run(async (ctx) => ctx.db.query("users").collect()),
+  ).toHaveLength(1);
+});
+
+test("the setup token is not required — and not accepted as a gate — on signIn", async () => {
+  // The gate is scoped to the signUp flow: an existing account signs in with
+  // no token at all, and a wrong token on signIn is simply an unused param
+  // rather than a second lock (the password is the credential there).
+  const t = convexTest(schema, modules);
+  await t.action(api.auth.signIn, signUpParams());
+  delete process.env.AUTH_SETUP_TOKEN;
+  const again = await t.action(api.auth.signIn, {
+    provider: "password",
+    params: { email: FOUNDER, password: PASSWORD, flow: "signIn" },
+  });
+  expect(again.tokens).not.toBeNull();
+  expect(
+    await t.run(async (ctx) => ctx.db.query("users").collect()),
+  ).toHaveLength(1);
+});
+
+test("a non-allowlisted email is rejected on signIn too, not just signUp", async () => {
+  // profile() runs on every flow of the provider, so rotating the allowlist
+  // locks out the old address at the front door as well as per-request.
+  const t = convexTest(schema, modules);
+  await t.action(api.auth.signIn, signUpParams());
+  process.env.AUTH_ALLOWED_EMAIL = "successor@example.com";
   await expect(
     t.action(api.auth.signIn, {
       provider: "password",
-      params: { email: FOUNDER, password: PASSWORD, flow: "signUp" },
+      params: { email: FOUNDER, password: PASSWORD, flow: "signIn" },
     }),
   ).rejects.toThrow();
-  expect(await t.run(async (ctx) => ctx.db.query("users").collect())).toEqual([]);
+});
+
+test("P1 invariant: a second user can never be minted", async () => {
+  // Even with a valid setup token and the allowlisted email, sign-up cannot
+  // insert alongside an existing user row — exactly-one-user is a DB
+  // invariant in createOrUpdateUser, not a hope.
+  const t = convexTest(schema, modules);
+  await t.run(async (ctx) => {
+    await ctx.db.insert("users", { email: FOUNDER });
+  });
+  await expect(t.action(api.auth.signIn, signUpParams())).rejects.toThrow(
+    /already exists/,
+  );
+  expect(await t.run(async (ctx) => ctx.db.query("users").collect())).toHaveLength(1);
+});
+
+test("rotation is recoverable: sign-up on the new address reclaims the one row", async () => {
+  // Rotating AUTH_ALLOWED_EMAIL revokes live sessions (above) — but if the
+  // stale row could never be re-pointed, revocation would be a one-way door:
+  // every authed call throws, signIn on the old address fails the allowlist,
+  // and signIn on the new one has no account. A sign-up carrying a valid
+  // setup token must reclaim the single row rather than hit the invariant.
+  const t = convexTest(schema, modules);
+  await t.action(api.auth.signIn, signUpParams());
+  const SUCCESSOR = "successor@example.com";
+  process.env.AUTH_ALLOWED_EMAIL = SUCCESSOR;
+
+  const reclaimed = await t.action(
+    api.auth.signIn,
+    signUpParams({ email: SUCCESSOR, password: "a-new-long-password" }),
+  );
+  expect(reclaimed.tokens).not.toBeNull();
+
+  const users = await t.run(async (ctx) => ctx.db.query("users").collect());
+  expect(users).toHaveLength(1);
+  expect(users[0].email).toBe(SUCCESSOR);
+
+  // The reclaim keeps the user id, so the predecessor's sessions would come
+  // back to life the moment requireUserId sees the new allowlisted email —
+  // handing access back to exactly whoever rotation was meant to cut off.
+  // They must be gone, refresh tokens with them.
+  const leftovers = await t.run(async (ctx) => ({
+    sessions: await ctx.db.query("authSessions").collect(),
+    refreshTokens: await ctx.db.query("authRefreshTokens").collect(),
+  }));
+  // Only the successor's freshly-minted session may remain.
+  expect(leftovers.sessions).toHaveLength(1);
+  for (const token of leftovers.refreshTokens) {
+    expect(leftovers.sessions.map((s) => s._id)).toContain(token.sessionId);
+  }
+
+  // The successor can sign in; the old address cannot (it fails the
+  // allowlist in `profile`, so its surviving provider account is inert).
+  const back = await t.action(api.auth.signIn, {
+    provider: "password",
+    params: { email: SUCCESSOR, password: "a-new-long-password", flow: "signIn" },
+  });
+  expect(back.tokens).not.toBeNull();
+  await expect(
+    t.action(api.auth.signIn, {
+      provider: "password",
+      params: { email: FOUNDER, password: PASSWORD, flow: "signIn" },
+    }),
+  ).rejects.toThrow(/not allowed/);
+});
+
+test("a password past the cap is rejected on signIn too, before any hashing", async () => {
+  // validatePasswordRequirements runs on signUp/reset only, so the bound has
+  // to be asserted in `profile` or signIn hands scrypt an unbounded string.
+  const t = convexTest(schema, modules);
+  await t.action(api.auth.signIn, signUpParams());
+  await expect(
+    t.action(api.auth.signIn, {
+      provider: "password",
+      params: { email: FOUNDER, password: "x".repeat(100_000), flow: "signIn" },
+    }),
+  ).rejects.toThrow(/capped/);
 });

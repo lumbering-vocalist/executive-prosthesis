@@ -7,10 +7,9 @@ import {
 const isSignInPage = createRouteMatcher(["/signin"]);
 
 // T2: every page requires the signed-in founder; /signin is the only
-// unauthenticated page. Static assets (anything with a file extension) and
-// Next internals are excluded by the matcher below, so the manifest, icons,
-// and fonts keep loading before auth — the PWA must be installable from the
-// sign-in screen.
+// unauthenticated page. Next internals and the enumerated static assets are
+// excluded by the matcher below, so the manifest, icons, and fonts keep
+// loading before auth — the PWA must be installable from the sign-in screen.
 export default convexAuthNextjsMiddleware(
   async (request, { convexAuth }) => {
     const authed = await convexAuth.isAuthenticated();
@@ -29,5 +28,25 @@ export default convexAuthNextjsMiddleware(
 );
 
 export const config = {
-  matcher: ["/((?!.*\\..*|_next).*)", "/", "/(api|trpc)(.*)"],
+  // Auth runs on every route except Next internals and the enumerated
+  // pre-auth static surface (the PWA must be installable from the sign-in
+  // screen: manifest, icons, fonts, favicon). Enumerated deliberately — the
+  // old "anything with a dot" exclusion was a latent auth bypass for any
+  // future route like /export/data.json (review P2). A new static asset that
+  // isn't listed here fails safe: it redirects to /signin instead of leaking.
+  // The Convex authed* wrappers remain the real enforcement either way.
+  // The literal files that ship, not namespaces or wildcards: excluding
+  // `icons/` wholesale — or even `icons/*.png` — would let a future route
+  // like `/icons/export.png` through unauthenticated, the same shape as the
+  // dotted-path hole this replaced. A new asset must be added here, and
+  // until it is it simply requires auth. (No favicon.ico ships; the icons
+  // come from app/layout.tsx metadata and the manifest.)
+  //
+  // INVARIANT: `/api/auth` MUST keep matching. Convex Auth's sign-in,
+  // sign-out, and token refresh are all POSTs to it, proxied by
+  // convexAuthNextjsMiddleware — excluding it 404s every auth action.
+  // tests/proxy-matcher.test.ts asserts this.
+  matcher: [
+    "/((?!_next/|icons/icon-192\\.png$|icons/icon-512\\.png$|icons/apple-touch-icon\\.png$|fonts/figtree-latin-var\\.woff2$|fonts/figtree-latin-ext-var\\.woff2$|manifest\\.webmanifest$).*)",
+  ],
 };

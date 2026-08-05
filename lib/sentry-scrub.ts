@@ -13,11 +13,15 @@
  *    breadcrumb messages (console logs land here) are redacted outright;
  *    request bodies/cookies/headers/query strings are dropped — the capture
  *    endpoint's payload IS user content.
- *  - exception.values[].value is the one free-text channel kept: error
- *    messages are Sentry's core diagnostic and are code-authored. The
- *    standing rule is never to interpolate capture content into thrown
- *    errors; revisit with a content-tagging redactor at T4 when capture
- *    text first exists in the app.
+ *  - exception.values[].value is the one free-text channel kept, pattern-
+ *    scrubbed (pre-T3 hardening): error messages are Sentry's core
+ *    diagnostic, but runtime errors echo their input — V8's JSON.parse
+ *    SyntaxError quotes the parsed payload, Convex validators echo argument
+ *    values. Anything the message quotes, any object literal, and anything
+ *    after a "Value:" marker is treated as data and redacted; see
+ *    redactExceptionValue. The standing rule never to interpolate capture
+ *    content into thrown errors still applies — the scrub enforces it
+ *    against errors we don't author.
  */
 
 export const SENSITIVE_KEYS = [
@@ -39,6 +43,9 @@ export const SENSITIVE_KEYS = [
   // Sentry's console integration stores raw console args here — the channel
   // a stray console.log(captureText) would ride.
   "arguments",
+  // Validator payloads and generic wrappers land under value/values — the
+  // review's named example of a key the deny-list was fail-open for.
+  "value",
 ] as const;
 
 export const SCRUB_MAX_DEPTH = 10;
@@ -73,11 +80,44 @@ function stripQuery(url: string): string {
   return base.replace(/\/\/[^/@]*@/, "//");
 }
 
-// Exception values are kept (see header) but bounded: runtime errors like
-// JSON.parse SyntaxError echo a snippet of their input, so a cap limits how
-// much of any interpolated content could ride along. Full redaction lands
-// pre-T3 (TODOS) before capture data first flows through parsers.
 const EXCEPTION_VALUE_MAX = 300;
+
+/**
+ * Pattern-scrub for exception messages (the pre-T3 TODOS item): the parts of
+ * an error message that carry data — quoted spans, object literals, anything
+ * after a "Value:" marker (Convex validator echoes) — are redacted; the
+ * code-authored prose around them survives as the diagnostic. Over-matching
+ * loses diagnostics, under-matching leaks content — fail closed. Concretely:
+ *  - Quotes are NOT matched in pairs per style: an apostrophe inside echoed
+ *    content ("don't") would close a paired span early and leak the tail.
+ *    Instead one greedy span runs from the first quote character of any
+ *    style to the last; a lone unterminated quote redacts to end-of-string.
+ *  - An object literal redacts from its opening "{" to end-of-string — a
+ *    truncated echo may never close the brace.
+ *  - Inputs far beyond the cap are redacted wholesale before any regex runs:
+ *    the pattern work is O(n) but there is no diagnostic value past the cap,
+ *    and beforeSend runs synchronously on the main thread.
+ * The length cap stays as the backstop for unquoted free-text echoes.
+ */
+export function redactExceptionValue(value: string): string {
+  if (value.length > EXCEPTION_VALUE_MAX * 8) return REDACTED;
+  let out = value
+    .replace(/['"`][\s\S]*['"`]/, REDACTED)
+    .replace(/['"`][\s\S]*$/, REDACTED)
+    .replace(/\{[\s\S]*$/, REDACTED)
+    .replace(/(value:\s*)[\s\S]+/i, `$1${REDACTED}`)
+    // Unquoted channels the pattern rules above can't see. URLs carry
+    // content in their query strings ("Failed to parse URL from
+    // /api/x?text=…"); email addresses are the account identifier and
+    // Convex Auth interpolates one bare into "Account <id> already exists".
+    .replace(/\b[\w.+-]+@[\w-]+\.[\w.-]+/g, REDACTED)
+    .replace(/\b(?:https?:\/\/|\/)\S*[?#]\S*/g, (url) => stripQuery(url));
+  if (out.length > EXCEPTION_VALUE_MAX) {
+    // Cut on a code-point boundary so truncation can't emit a lone surrogate.
+    out = Array.from(out).slice(0, EXCEPTION_VALUE_MAX).join("") + "…";
+  }
+  return out;
+}
 
 function scrubValue(value: unknown, depth = 0, key = ""): unknown {
   if (typeof value === "string" && isUrlKey(key)) return stripQuery(value);
@@ -95,6 +135,16 @@ function scrubValue(value: unknown, depth = 0, key = ""): unknown {
   return out;
 }
 
+// Frame-local variables (includeLocalVariables / ANR captures) are whole
+// program state — the one frame field that can carry capture text. Dropped
+// wholesale rather than scrubbed: fail closed.
+function dropFrameLocals(
+  stacktrace?: { frames?: { vars?: unknown }[] } | null,
+): void {
+  if (!stacktrace?.frames) return;
+  for (const frame of stacktrace.frames) delete frame.vars;
+}
+
 /**
  * `beforeSend` / `beforeSendTransaction` hook. Typed structurally (not against
  * Sentry's Event type) so it is unit-testable without the SDK and reusable
@@ -104,7 +154,20 @@ export function scrubEvent<
   E extends {
     message?: string;
     // Exception values are the one kept free-text channel (see header).
-    exception?: { values?: { type?: string; value?: string }[] } | null;
+    exception?: {
+      values?: {
+        type?: string;
+        value?: string;
+        // Structurally loose so Sentry's StackFrame assigns; only `vars`
+        // (frame-local variables) is touched.
+        stacktrace?: { frames?: { vars?: unknown; filename?: string }[] } | null;
+      }[];
+    } | null;
+    threads?: {
+      values?: {
+        stacktrace?: { frames?: { vars?: unknown; filename?: string }[] } | null;
+      }[];
+    } | null;
     request?:
       | {
           data?: unknown;
@@ -129,9 +192,13 @@ export function scrubEvent<
   delete (event as { logentry?: unknown }).logentry;
   if (event.exception?.values) {
     for (const ex of event.exception.values) {
-      if (ex.value && ex.value.length > EXCEPTION_VALUE_MAX)
-        ex.value = ex.value.slice(0, EXCEPTION_VALUE_MAX) + "…";
+      if (ex.value) ex.value = redactExceptionValue(ex.value);
+      dropFrameLocals(ex.stacktrace);
     }
+  }
+  // Threads carry the same stacktrace shape (ANR / worker reports).
+  if (event.threads?.values) {
+    for (const thread of event.threads.values) dropFrameLocals(thread.stacktrace);
   }
   if (event.request) {
     // Bodies, cookies, headers, and query strings never ship.

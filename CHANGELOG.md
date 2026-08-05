@@ -3,6 +3,26 @@
 All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versions are MAJOR.MINOR.PATCH.MICRO.
 
+## [0.2.1.0] - 2026-08-05
+
+### Security
+
+- Creating the account now takes a one-time setup token, not just knowledge of the allowlisted email. Set `AUTH_SETUP_TOKEN` on the deployment (generate it: `openssl rand -hex 24`), sign up once, then unset it — with it unset, account creation is off entirely. A weak token is refused outright, because sign-up is the one flow Convex Auth doesn't rate-limit.
+- Passwords need at least 12 characters (was the provider's 8), and an oversized one is rejected before any hashing work on every flow — so nobody can make the server chew on a megabyte-long guess.
+- Sessions can now be revoked. A session loses data access the moment its user record is gone or the allowlist changes, instead of drifting on for up to an hour on a stale token. Changing `AUTH_ALLOWED_EMAIL` is a working revocation switch — and a recoverable one: signing up on the new address re-points the existing account (destroying the old sessions) rather than locking you out, and the error screen carries a "Sign out instead" exit for exactly that case. The browser's sign-in cookie stays valid until you use it, which is what that button is for.
+- Crash reports scrub harder before leaving the device: quoted fragments, object literals, validator echoes, URL query strings, and email addresses are stripped out of error messages, and local variables captured with a stack trace are dropped entirely. The old rule kept anything an error message quoted — which is exactly where a parser echoes back what it was handed.
+- The auth perimeter now names the exact files that skip sign-in (the two fonts, the three icons, the manifest) instead of waving through anything with a dot in it, so a future route like `/export/data.json` — or `/icons/export.png` — can't slip past unauthenticated.
+
+### Fixed
+
+- A sign-in on a dropped connection says so after 20 seconds instead of leaving the button spinning forever — the failure mode you'd actually hit on a phone.
+- Missing deployment configuration now fails with a message naming the variable that's missing, rather than an opaque crash — and a deployment that isn't configured says so on the sign-in screen instead of claiming your password was wrong.
+- The sign-up form asks for the password twice and states the length rule up front, so a typo during the one-shot account creation can't lock you out permanently.
+
+### Internal
+
+- Test suite grew from 50 to 115 tests, covering session revocation, the setup-token gate, the auth perimeter regex, and every scrubber channel. CI gains a schema/codegen drift check that activates once a `CONVEX_DEPLOY_KEY` secret exists and warns visibly until then.
+
 ## [0.2.0.0] - 2026-07-23
 
 ### Added

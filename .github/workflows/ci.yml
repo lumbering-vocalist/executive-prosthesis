@@ -9,6 +9,14 @@ permissions:
 jobs:
   checks:
     runs-on: ubuntu-latest
+    env:
+      # Secrets aren't readable in step `if:` expressions; surface only a
+      # PRESENCE flag at job scope so the codegen drift check can self-skip
+      # until the founder adds the CONVEX_DEPLOY_KEY repo secret. The secret
+      # itself is injected on that one step — a deploy key with full write
+      # authority must not sit in the env of `npm ci`/`npm test`, where any
+      # compromised transitive dep's postinstall could read it.
+      HAS_CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY != '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -21,6 +29,27 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
+      - name: Convex codegen drift check
+        # convex/_generated is committed; regenerate against the deployment
+        # and fail if it drifted from convex/schema.ts. Self-skips (with a
+        # notice, not silently green) until CONVEX_DEPLOY_KEY exists.
+        if: ${{ env.HAS_CONVEX_DEPLOY_KEY == 'true' }}
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+        run: |
+          npx convex codegen
+          # porcelain, not `diff --exit-code`: codegen emitting a NEW file
+          # leaves it untracked, which `git diff` ignores entirely.
+          test -z "$(git status --porcelain convex/_generated)" || {
+            git status --porcelain convex/_generated
+            echo "::error::convex/_generated drifted from convex/schema.ts — run 'npm run codegen' and commit"
+            exit 1
+          }
+      - name: Convex codegen drift check (skipped)
+        if: ${{ env.HAS_CONVEX_DEPLOY_KEY != 'true' }}
+        # warning, not notice: a notice is easy to miss, and until the secret
+        # lands schema drift ships green.
+        run: echo "::warning::codegen drift check skipped — add the CONVEX_DEPLOY_KEY repo secret to enable it"
       - run: npm run build
         env:
           # No Sentry upload in CI; init is a no-op without a DSN.
