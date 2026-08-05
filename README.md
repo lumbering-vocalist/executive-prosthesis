@@ -10,11 +10,13 @@ Requires Node 22 (the version CI runs).
 
 ```bash
 npm ci
-npx convex dev   # writes NEXT_PUBLIC_CONVEX_URL into .env.local
-npm run dev
+npx convex dev    # first run configures the project and writes NEXT_PUBLIC_CONVEX_URL to .env.local; it keeps running, so leave it
+npm run dev       # second terminal
 ```
 
-Open http://localhost:3000. Every page sits behind sign-in now, so the dev server needs a Convex deployment: without `NEXT_PUBLIC_CONVEX_URL` the app fails at startup with that variable's name. `npm test` and `npm run build` still need nothing — the build uses a placeholder URL and never opens a connection. No Sentry DSN is needed anywhere.
+Open http://localhost:3000 — every page is behind sign-in, so you land on `/signin`. Claiming the account is the next section.
+
+Both `npm run dev` and `npm run build` need `NEXT_PUBLIC_CONVEX_URL`: the Convex client is constructed at module scope and fails by that variable's name without it. `.env.local` from `npx convex dev` covers both locally; CI passes a placeholder URL, since the build never opens a connection. `npm test` needs nothing, and no Sentry DSN is needed anywhere.
 
 ## Signing in
 
@@ -23,7 +25,8 @@ One person, one account. `AUTH_ALLOWED_EMAIL` on the Convex deployment is the en
 **Claiming the account (once).** Knowing the allowlisted email is not authorization, so account creation is gated on a one-time setup token:
 
 ```bash
-npx convex env set AUTH_SETUP_TOKEN $(openssl rand -hex 24)
+npx convex env set AUTH_ALLOWED_EMAIL you@example.com          # the allowlist; nobody signs in until this is set
+npx convex env set AUTH_SETUP_TOKEN $(openssl rand -hex 24)    # print it: npx convex env get AUTH_SETUP_TOKEN
 # sign up at /signin with the allowlisted email, that token, and a password
 npx convex env remove AUTH_SETUP_TOKEN
 ```
@@ -32,7 +35,7 @@ Generate the token, don't invent one — anything under 24 characters or with fe
 
 Passwords need at least 12 characters, capped at 256 and bounded before any hashing work on every flow. There is no password reset until email lands at T5; recovery means deleting the `authAccounts` and `users` rows in the Convex dashboard, then re-running the setup-token sign-up ([TODOS.md](TODOS.md) has the full recovery paths).
 
-**Revoking access.** Change `AUTH_ALLOWED_EMAIL`. Live sessions stop working immediately instead of drifting on a stale token. It is recoverable, not a one-way door: set a setup token again and sign up on the new address — that re-points the existing account rather than minting a second one. A revoked session lands on the error screen, whose "Sign out instead" button is the way back to `/signin`.
+**Revoking access.** Change `AUTH_ALLOWED_EMAIL`. Every authenticated Convex call re-checks it, so a live session loses all data access immediately instead of drifting on a stale token until it expires. The middleware's auth cookie stays valid — which is why a revoked session lands on the error screen rather than the login page, and why that screen carries a "Sign out instead" button as the way back to `/signin`. It is recoverable, not a one-way door: set a setup token again and sign up on the new address — that re-points the existing account rather than minting a second one.
 
 ## Commands
 
@@ -58,7 +61,7 @@ CI also runs a Convex codegen drift check: it regenerates `convex/_generated` an
 
 The backend is Convex. `convex/schema.ts` currently holds Convex Auth's own tables (`users`, `authAccounts`, `authSessions`, …); domain tables land at T3. The generated bindings are committed in `convex/_generated/`, so tests and builds run without any Convex deployment.
 
-Every public Convex function goes through the authed wrappers in `convex/functions.ts`, which inject the signed-in user and re-check the allowlist per request; `tests/function-split.test.ts` mechanically blocks any module from exporting an unauthenticated function.
+Every public data function goes through the authed wrappers in `convex/functions.ts`, which inject the signed-in user and re-check the allowlist per request; `tests/function-split.test.ts` mechanically blocks any other module from touching the raw public builders. Convex Auth's own surface (`signIn`/`signOut`/`store`/`isAuthenticated` in `convex/auth.ts`) is the one sanctioned unauthenticated exception — it is how a session comes to exist.
 
 `npm run codegen` regenerates the bindings and needs a configured deployment (`npx convex dev --configure`). Regenerate and commit whenever the schema changes — CI's drift check fails the build if the committed bindings fall behind.
 
